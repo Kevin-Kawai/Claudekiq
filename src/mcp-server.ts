@@ -22,6 +22,12 @@ import {
   resumeRecurringJob,
   isValidCronExpression,
   prisma,
+  getWorkspaces,
+  getWorkspace,
+  getConversations,
+  getConversation,
+  sendMessage,
+  createWorktree,
 } from "./queue";
 import {
   getRegisteredJobs,
@@ -588,6 +594,355 @@ server.registerTool(
           {
             type: "text" as const,
             text: `Recurring job ${jobId} has been resumed. Next run: ${job.nextRunAt}`,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ============ Workspace Tools ============
+
+// Tool: List workspaces
+server.registerTool(
+  "list_workspaces",
+  {
+    description: "List all configured workspaces (directories for conversations)",
+  },
+  async () => {
+    const workspaces = await getWorkspaces();
+
+    if (workspaces.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "No workspaces configured",
+          },
+        ],
+      };
+    }
+
+    const result = workspaces.map((ws) => ({
+      id: ws.id,
+      name: ws.name,
+      path: ws.path,
+      createdAt: ws.createdAt,
+    }));
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  }
+);
+
+// ============ Conversation Tools ============
+
+// Tool: List conversations
+server.registerTool(
+  "list_conversations",
+  {
+    description: "List conversations with their status and message count, optionally filtered by workspace",
+    inputSchema: {
+      workspaceId: z
+        .number()
+        .optional()
+        .describe("Filter by workspace ID (get IDs from list_workspaces). If not provided, returns all conversations."),
+      limit: z
+        .number()
+        .optional()
+        .default(20)
+        .describe("Maximum number of conversations to return (default: 20)"),
+    },
+  },
+  async ({ workspaceId, limit }) => {
+    const conversations = await getConversations(workspaceId, limit);
+
+    if (conversations.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: workspaceId ? "No conversations found for this workspace" : "No conversations found",
+          },
+        ],
+      };
+    }
+
+    const result = conversations.map((conv) => ({
+      id: conv.id,
+      title: conv.title || `Conversation #${conv.id}`,
+      status: conv.status,
+      messageCount: conv._count?.messages || 0,
+      workspace: conv.workspace?.name || null,
+      worktreeBranch: conv.worktreeBranch || null,
+      cwd: conv.cwd,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+    }));
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  }
+);
+
+// Tool: Create conversation
+server.registerTool(
+  "create_conversation",
+  {
+    description: "Create a new conversation and optionally send an initial message. Supports workspaces and git worktrees for parallel work.",
+    inputSchema: {
+      message: z
+        .string()
+        .optional()
+        .describe("Initial message to send to the conversation"),
+      title: z
+        .string()
+        .optional()
+        .describe("Optional title for the conversation"),
+      workspaceId: z
+        .number()
+        .optional()
+        .describe("Workspace ID to use (get IDs from list_workspaces)"),
+      useWorktree: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Create a git worktree for this conversation (requires workspaceId)"),
+      branchName: z
+        .string()
+        .optional()
+        .describe("Branch name for the worktree (required if useWorktree is true)"),
+      cwd: z
+        .string()
+        .optional()
+        .describe("Working directory (used if workspaceId is not provided)"),
+    },
+  },
+  async ({ message, title, workspaceId, useWorktree, branchName, cwd }) => {
+    let finalCwd = cwd;
+    let worktreePath: string | undefined;
+    let worktreeBranch: string | undefined;
+
+    // Handle workspace and worktree
+    if (workspaceId) {
+      const workspace = await getWorkspace(workspaceId);
+      if (!workspace) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: Workspace with ID ${workspaceId} not found`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (useWorktree) {
+        if (!branchName) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: branchName is required when useWorktree is true",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        try {
+          worktreePath = await createWorktree(workspace.path, branchName);
+          worktreeBranch = branchName;
+          finalCwd = worktreePath;
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Error creating worktree: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      } else {
+        finalCwd = workspace.path;
+      }
+    }
+
+    // Create the conversation
+    const conversation = await prisma.conversation.create({
+      data: {
+        title,
+        cwd: finalCwd,
+        workspaceId,
+        worktreePath,
+        worktreeBranch,
+      },
+    });
+
+    // Send initial message if provided
+    if (message) {
+      await sendMessage(conversation.id, message);
+    }
+
+    let responseText = `Conversation created successfully!\n\nID: ${conversation.id}`;
+    if (title) responseText += `\nTitle: ${title}`;
+    if (finalCwd) responseText += `\nWorking Directory: ${finalCwd}`;
+    if (worktreeBranch) responseText += `\nBranch: ${worktreeBranch}`;
+    if (message) responseText += `\n\nInitial message queued for processing.`;
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: responseText,
+        },
+      ],
+    };
+  }
+);
+
+// Tool: Get conversation messages
+server.registerTool(
+  "get_conversation_messages",
+  {
+    description: "Get all messages from a conversation",
+    inputSchema: {
+      conversationId: z
+        .number()
+        .describe("The conversation ID to get messages from"),
+    },
+  },
+  async ({ conversationId }) => {
+    const conversation = await getConversation(conversationId);
+
+    if (!conversation) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Error: Conversation with ID ${conversationId} not found`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    if (!conversation.messages || conversation.messages.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Conversation #${conversationId} has no messages yet`,
+          },
+        ],
+      };
+    }
+
+    const messages = conversation.messages.map((msg) => {
+      let content;
+      try {
+        const parsed = JSON.parse(msg.content);
+        // Extract text content based on message type
+        if (msg.role === "user") {
+          content = parsed.text || parsed.prompt;
+        } else if (msg.role === "assistant") {
+          // Extract text blocks from assistant messages
+          if (parsed.content && Array.isArray(parsed.content)) {
+            content = parsed.content
+              .filter((block: { text?: string }) => block.text)
+              .map((block: { text: string }) => block.text)
+              .join("\n");
+          } else {
+            content = parsed;
+          }
+        } else if (msg.role === "result") {
+          content = `Session ${parsed.subtype}${parsed.total_cost_usd ? ` (Cost: $${parsed.total_cost_usd.toFixed(4)})` : ""}`;
+        } else {
+          content = parsed;
+        }
+      } catch {
+        content = msg.content;
+      }
+
+      return {
+        id: msg.id,
+        role: msg.role,
+        content,
+        createdAt: msg.createdAt,
+      };
+    });
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              conversationId: conversation.id,
+              title: conversation.title || `Conversation #${conversation.id}`,
+              status: conversation.status,
+              workspace: conversation.workspace?.name || null,
+              cwd: conversation.cwd,
+              messageCount: messages.length,
+              messages,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// Tool: Send message to conversation
+server.registerTool(
+  "send_conversation_message",
+  {
+    description: "Send a follow-up message to an existing conversation",
+    inputSchema: {
+      conversationId: z
+        .number()
+        .describe("The conversation ID to send the message to"),
+      message: z
+        .string()
+        .describe("The message to send"),
+    },
+  },
+  async ({ conversationId, message }) => {
+    try {
+      const job = await sendMessage(conversationId, message);
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Message queued for processing.\n\nConversation ID: ${conversationId}\nJob ID: ${job.id}\nStatus: ${job.status}`,
           },
         ],
       };
