@@ -17,6 +17,11 @@ import {
   getConversation,
   getConversations,
   sendMessage,
+  createWorkspace,
+  getWorkspaces,
+  getWorkspace,
+  deleteWorkspace,
+  createWorktree,
 } from "./queue";
 import {
   getRegisteredJobs,
@@ -141,6 +146,20 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .conversation-status.closed { background: #e5e7eb; color: #374151; }
         .add-job-btn.schedule { background: #8b5cf6; }
         .add-job-btn.schedule:hover { background: #7c3aed; }
+        .workspaces-section { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .workspaces-header { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        .workspaces-list { padding: 0; }
+        .workspace-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f3f4f6; }
+        .workspace-item:last-child { border-bottom: none; }
+        .workspace-info { flex: 1; }
+        .workspace-name { font-weight: 500; margin-bottom: 4px; }
+        .workspace-path { font-size: 13px; color: #6b7280; font-family: monospace; }
+        .workspace-actions { display: flex; gap: 8px; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-small { padding: 4px 8px; font-size: 12px; }
+        .form-group input[type="checkbox"] { width: auto; margin-right: 8px; }
+        .checkbox-label { display: flex; align-items: center; cursor: pointer; }
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; }
         .modal.active { display: flex; justify-content: center; align-items: center; }
         .modal-content { background: white; padding: 24px; border-radius: 12px; max-width: 500px; width: 90%; }
@@ -332,15 +351,119 @@ const Layout: FC<{ children: any }> = ({ children }) => (
           }
         }
 
-        // ============ Conversations ============
-        async function fetchConversations() {
+        // ============ Workspaces ============
+        var workspacesCache = [];
+
+        async function fetchWorkspaces() {
           try {
-            var res = await fetch('/api/conversations');
+            var res = await fetch('/api/workspaces');
+            var workspaces = await res.json();
+            workspacesCache = workspaces;
+            var container = document.getElementById('workspaces-list');
+
+            if (workspaces.length === 0) {
+              container.innerHTML = '<div class="empty-state">No workspaces configured. Add one to get started!</div>';
+              return;
+            }
+
+            container.innerHTML = workspaces.map(function(ws) {
+              return '<div class="workspace-item">' +
+                '<div class="workspace-info">' +
+                  '<div class="workspace-name">' + escapeHtml(ws.name) + '</div>' +
+                  '<div class="workspace-path">' + escapeHtml(ws.path) + '</div>' +
+                '</div>' +
+                '<div class="workspace-actions">' +
+                  '<button class="btn btn-danger btn-small" onclick="deleteWorkspace(' + ws.id + ')">Delete</button>' +
+                '</div>' +
+              '</div>';
+            }).join('');
+
+            // Update the conversation workspace filter dropdown
+            updateConversationWorkspaceFilter();
+          } catch (e) {
+            console.error('Failed to fetch workspaces:', e);
+          }
+        }
+
+        function openNewWorkspaceModal() {
+          document.getElementById('new-workspace-modal').classList.add('active');
+        }
+
+        function closeNewWorkspaceModal() {
+          document.getElementById('new-workspace-modal').classList.remove('active');
+          document.getElementById('new-workspace-name').value = '';
+          document.getElementById('new-workspace-path').value = '';
+        }
+
+        async function submitNewWorkspace() {
+          var name = document.getElementById('new-workspace-name').value.trim();
+          var path = document.getElementById('new-workspace-path').value.trim();
+
+          if (!name || !path) {
+            alert('Please enter both name and path');
+            return;
+          }
+
+          try {
+            var res = await fetch('/api/workspaces', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: name, path: path })
+            });
+            if (!res.ok) {
+              var err = await res.json();
+              alert('Error: ' + (err.error || 'Unknown error'));
+              return;
+            }
+            closeNewWorkspaceModal();
+            fetchWorkspaces();
+          } catch (e) {
+            console.error('Failed to add workspace:', e);
+            alert('Failed to add workspace');
+          }
+        }
+
+        async function deleteWorkspace(id) {
+          if (!confirm('Are you sure you want to delete this workspace?')) {
+            return;
+          }
+          try {
+            var res = await fetch('/api/workspaces/' + id, { method: 'DELETE' });
+            if (!res.ok) {
+              var err = await res.json();
+              alert('Error: ' + (err.error || 'Unknown error'));
+              return;
+            }
+            fetchWorkspaces();
+          } catch (e) {
+            console.error('Failed to delete workspace:', e);
+            alert('Failed to delete workspace');
+          }
+        }
+
+        // ============ Conversations ============
+        var selectedWorkspaceId = null;
+
+        function onConversationWorkspaceChange() {
+          var select = document.getElementById('conversation-workspace-filter');
+          selectedWorkspaceId = select.value ? parseInt(select.value) : null;
+          fetchConversations();
+        }
+
+        async function fetchConversations() {
+          var container = document.getElementById('conversations-list');
+
+          if (!selectedWorkspaceId) {
+            container.innerHTML = '<div class="empty-state">Select a workspace to view conversations</div>';
+            return;
+          }
+
+          try {
+            var res = await fetch('/api/conversations?workspaceId=' + selectedWorkspaceId);
             var conversations = await res.json();
-            var container = document.getElementById('conversations-list');
 
             if (conversations.length === 0) {
-              container.innerHTML = '<div class="empty-state">No conversations yet. Start one!</div>';
+              container.innerHTML = '<div class="empty-state">No conversations in this workspace. Start one!</div>';
               return;
             }
 
@@ -355,10 +478,11 @@ const Layout: FC<{ children: any }> = ({ children }) => (
               var title = conv.title || 'Conversation #' + conv.id;
               var date = new Date(conv.updatedAt).toLocaleString();
               var msgCount = conv._count ? conv._count.messages : 0;
+              var branchBadge = conv.worktreeBranch ? '<span style="background:#e0f2fe;color:#0369a1;padding:2px 6px;border-radius:4px;font-size:11px;font-family:monospace;">' + escapeHtml(conv.worktreeBranch) + '</span>' : '';
 
               return '<div class="conversation-item" onclick="window.location.href=\\'/conversations/' + conv.id + '\\'">' +
                 '<div class="conversation-info">' +
-                  '<div class="conversation-title">' + escapeHtml(title) + '</div>' +
+                  '<div class="conversation-title">' + escapeHtml(title) + ' ' + branchBadge + '</div>' +
                   '<div class="conversation-preview">' + escapeHtml(preview) + '</div>' +
                 '</div>' +
                 '<div class="conversation-meta">' +
@@ -373,6 +497,21 @@ const Layout: FC<{ children: any }> = ({ children }) => (
           }
         }
 
+        function updateConversationWorkspaceFilter() {
+          var select = document.getElementById('conversation-workspace-filter');
+          var currentValue = select.value;
+          select.innerHTML = '<option value="">-- Select workspace --</option>';
+          workspacesCache.forEach(function(ws) {
+            var opt = document.createElement('option');
+            opt.value = ws.id;
+            opt.textContent = ws.name;
+            if (currentValue && parseInt(currentValue) === ws.id) {
+              opt.selected = true;
+            }
+            select.appendChild(opt);
+          });
+        }
+
         function escapeHtml(text) {
           if (!text) return '';
           var div = document.createElement('div');
@@ -382,13 +521,54 @@ const Layout: FC<{ children: any }> = ({ children }) => (
 
         function openNewConversationModal() {
           document.getElementById('new-conversation-modal').classList.add('active');
+          // Populate workspace dropdown
+          var select = document.getElementById('new-conversation-workspace');
+          select.innerHTML = '<option value="">-- Select workspace or enter path below --</option>';
+          workspacesCache.forEach(function(ws) {
+            var opt = document.createElement('option');
+            opt.value = ws.id;
+            opt.textContent = ws.name + ' (' + ws.path + ')';
+            select.appendChild(opt);
+          });
         }
 
         function closeNewConversationModal() {
           document.getElementById('new-conversation-modal').classList.remove('active');
           document.getElementById('new-conversation-message').value = '';
           document.getElementById('new-conversation-cwd').value = '';
+          document.getElementById('new-conversation-workspace').value = '';
+          document.getElementById('new-conversation-worktree').checked = false;
+          document.getElementById('new-conversation-branch').value = '';
+          document.getElementById('worktree-option').style.display = 'none';
+          document.getElementById('branch-name-group').style.display = 'none';
+          document.getElementById('cwd-group').style.display = 'block';
         }
+
+        function onWorktreeChange() {
+          var checked = document.getElementById('new-conversation-worktree').checked;
+          document.getElementById('branch-name-group').style.display = checked ? 'block' : 'none';
+        }
+
+        function onWorkspaceChange() {
+          var workspaceId = document.getElementById('new-conversation-workspace').value;
+          var worktreeOption = document.getElementById('worktree-option');
+          var cwdGroup = document.getElementById('cwd-group');
+          if (workspaceId) {
+            worktreeOption.style.display = 'block';
+            cwdGroup.style.display = 'none';
+          } else {
+            worktreeOption.style.display = 'none';
+            cwdGroup.style.display = 'block';
+          }
+        }
+
+        // Add event listener for workspace selection
+        document.addEventListener('DOMContentLoaded', function() {
+          var wsSelect = document.getElementById('new-conversation-workspace');
+          if (wsSelect) {
+            wsSelect.addEventListener('change', onWorkspaceChange);
+          }
+        });
 
         async function createConversation() {
           var message = document.getElementById('new-conversation-message').value.trim();
@@ -396,9 +576,26 @@ const Layout: FC<{ children: any }> = ({ children }) => (
             alert('Please enter a message');
             return;
           }
+          var workspaceId = document.getElementById('new-conversation-workspace').value;
+          var useWorktree = document.getElementById('new-conversation-worktree').checked;
+          var branchName = document.getElementById('new-conversation-branch').value.trim();
           var cwd = document.getElementById('new-conversation-cwd').value.trim();
+
+          if (useWorktree && !branchName) {
+            alert('Please enter a branch name for the worktree');
+            return;
+          }
+
           var body = { message: message };
-          if (cwd) body.cwd = cwd;
+          if (workspaceId) {
+            body.workspaceId = workspaceId;
+            body.useWorktree = useWorktree;
+            if (useWorktree && branchName) {
+              body.branchName = branchName;
+            }
+          } else if (cwd) {
+            body.cwd = cwd;
+          }
 
           try {
             var res = await fetch('/api/conversations', {
@@ -423,14 +620,21 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         // Initial fetch
         fetchStats();
         fetchJobs();
-        fetchConversations();
+        fetchWorkspaces().then(function() {
+          fetchConversations();
+        });
 
         // Poll every 2 seconds
         setInterval(function() {
           fetchStats();
           fetchJobs();
-          fetchConversations();
+          if (selectedWorkspaceId) {
+            fetchConversations();
+          }
         }, 2000);
+
+        // Poll workspaces less frequently
+        setInterval(fetchWorkspaces, 10000);
       </script>`)}
 
     </body>
@@ -514,12 +718,54 @@ const ConversationsList: FC = () => (
         <h2>Conversations</h2>
         <span class="refresh-info">Claude Code sessions with message history</span>
       </div>
-      <div class="job-buttons">
+      <div class="job-buttons" style="display:flex;align-items:center;gap:12px;">
+        <select id="conversation-workspace-filter" onchange="onConversationWorkspaceChange()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+          <option value="">-- Select workspace --</option>
+        </select>
         <button class="add-job-btn export" onclick="openNewConversationModal()">+ New Conversation</button>
       </div>
     </div>
     <div id="conversations-list" class="conversations-list">
+      <div class="empty-state">Select a workspace to view conversations</div>
+    </div>
+  </div>
+);
+
+const WorkspacesSection: FC = () => (
+  <div class="workspaces-section">
+    <div class="workspaces-header">
+      <div>
+        <h2>Workspaces</h2>
+        <span class="refresh-info">Configured directories for conversations</span>
+      </div>
+      <div class="job-buttons">
+        <button class="add-job-btn" onclick="openNewWorkspaceModal()">+ Add Workspace</button>
+      </div>
+    </div>
+    <div id="workspaces-list" class="workspaces-list">
       <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+);
+
+const NewWorkspaceModal: FC = () => (
+  <div id="new-workspace-modal" class="modal" onclick="if(event.target===this)closeNewWorkspaceModal()">
+    <div class="modal-content">
+      <h3>Add Workspace</h3>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="new-workspace-name" placeholder="my-project" />
+        <small>A short name for quick reference</small>
+      </div>
+      <div class="form-group">
+        <label>Path</label>
+        <input type="text" id="new-workspace-path" placeholder="/path/to/git/repository" />
+        <small>Must be a git repository for worktree support</small>
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-secondary" onclick="closeNewWorkspaceModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitNewWorkspace()">Add Workspace</button>
+      </div>
     </div>
   </div>
 );
@@ -533,7 +779,25 @@ const NewConversationModal: FC = () => (
         <textarea id="new-conversation-message" rows={4} placeholder="What would you like Claude to do?" style="width:100%;resize:vertical;"></textarea>
       </div>
       <div class="form-group">
-        <label>Working Directory (optional)</label>
+        <label>Workspace (optional)</label>
+        <select id="new-conversation-workspace">
+          <option value="">-- Select workspace or enter path below --</option>
+        </select>
+      </div>
+      <div class="form-group" id="worktree-option" style="display:none;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="new-conversation-worktree" onchange="onWorktreeChange()" />
+          Create worktree (allows parallel work in same repo)
+        </label>
+        <small>Creates a new branch and worktree for this conversation</small>
+      </div>
+      <div class="form-group" id="branch-name-group" style="display:none;">
+        <label>Branch Name</label>
+        <input type="text" id="new-conversation-branch" placeholder="feature/my-task" />
+        <small>Name for the new git branch</small>
+      </div>
+      <div class="form-group" id="cwd-group">
+        <label>Working Directory (if no workspace selected)</label>
         <input type="text" id="new-conversation-cwd" placeholder="/path/to/directory" />
       </div>
       <div class="modal-buttons">
@@ -606,11 +870,13 @@ const Dashboard: FC = () => (
   <Layout>
     <h1>Queue Dashboard</h1>
     <QueueStats />
+    <WorkspacesSection />
     <ConversationsList />
     <JobList />
     <ScheduleModal />
     <ClaudePromptModal />
     <NewConversationModal />
+    <NewWorkspaceModal />
   </Layout>
 );
 
@@ -944,6 +1210,12 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
           html += '<div class="info-item"><div class="info-label">Status</div><div class="info-value"><span class="status status-' + conv.status + '">' + conv.status + '</span></div></div>';
           html += '<div class="info-item"><div class="info-label">Created</div><div class="info-value">' + new Date(conv.createdAt).toLocaleString() + '</div></div>';
           html += '<div class="info-item"><div class="info-label">Messages</div><div class="info-value">' + conv.messages.length + '</div></div>';
+          if (conv.workspace) {
+            html += '<div class="info-item"><div class="info-label">Workspace</div><div class="info-value">' + escapeHtml(conv.workspace.name) + '</div></div>';
+          }
+          if (conv.worktreeBranch) {
+            html += '<div class="info-item"><div class="info-label">Branch</div><div class="info-value" style="font-family:monospace;">' + escapeHtml(conv.worktreeBranch) + '</div></div>';
+          }
           if (conv.cwd) {
             html += '<div class="info-item"><div class="info-label">Working Directory</div><div class="info-value" style="font-size:12px;word-break:break-all;">' + escapeHtml(conv.cwd) + '</div></div>';
           }
@@ -1251,18 +1523,58 @@ app.get("/api/jobs/:id", async (c) => {
 
 // ============ Conversation API ============
 
-// Get all conversations
+// Get conversations, optionally filtered by workspace
 app.get("/api/conversations", async (c) => {
-  const conversations = await getConversations();
+  const workspaceId = c.req.query("workspaceId");
+  const conversations = await getConversations(
+    workspaceId ? parseInt(workspaceId, 10) : undefined
+  );
   return c.json(conversations);
 });
 
 // Create a new conversation
 app.post("/api/conversations", async (c) => {
   const body = await c.req.json();
-  const conversation = await createConversation({
-    title: body.title,
-    cwd: body.cwd,
+
+  let cwd = body.cwd;
+  let worktreePath: string | undefined;
+  let worktreeBranch: string | undefined;
+  let workspaceId: number | undefined;
+
+  // If workspace is provided, use its path
+  if (body.workspaceId) {
+    workspaceId = parseInt(body.workspaceId, 10);
+    const workspace = await getWorkspace(workspaceId);
+    if (!workspace) {
+      return c.json({ error: "Workspace not found" }, 404);
+    }
+
+    // If worktree requested, create one
+    if (body.useWorktree) {
+      const branchName = body.branchName || `conv-${Date.now()}`;
+      try {
+        worktreePath = await createWorktree(workspace.path, branchName);
+        worktreeBranch = branchName;
+        cwd = worktreePath;
+      } catch (error) {
+        return c.json({
+          error: `Failed to create worktree: ${error instanceof Error ? error.message : "Unknown error"}`
+        }, 400);
+      }
+    } else {
+      cwd = workspace.path;
+    }
+  }
+
+  // Create conversation with workspace info
+  const conversation = await prisma.conversation.create({
+    data: {
+      title: body.title,
+      cwd,
+      workspaceId,
+      worktreePath,
+      worktreeBranch,
+    },
   });
 
   // If initial message provided, send it
@@ -1297,6 +1609,54 @@ app.post("/api/conversations/:id/messages", async (c) => {
   try {
     const job = await sendMessage(id, body.message);
     return c.json({ job, message: "Message queued for processing" }, 202);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 400);
+  }
+});
+
+// ============ Workspace API ============
+
+// Get all workspaces
+app.get("/api/workspaces", async (c) => {
+  const workspaces = await getWorkspaces();
+  return c.json(workspaces);
+});
+
+// Create a new workspace
+app.post("/api/workspaces", async (c) => {
+  const body = await c.req.json();
+
+  if (!body.name || !body.path) {
+    return c.json({ error: "Name and path are required" }, 400);
+  }
+
+  try {
+    const workspace = await createWorkspace(body.name, body.path);
+    return c.json(workspace, 201);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 400);
+  }
+});
+
+// Get a workspace by ID
+app.get("/api/workspaces/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  const workspace = await getWorkspace(id);
+
+  if (!workspace) {
+    return c.json({ error: "Workspace not found" }, 404);
+  }
+
+  return c.json(workspace);
+});
+
+// Delete a workspace
+app.delete("/api/workspaces/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+
+  try {
+    const workspace = await deleteWorkspace(id);
+    return c.json(workspace);
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 400);
   }

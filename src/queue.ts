@@ -522,15 +522,17 @@ export async function getConversation(id: number) {
         orderBy: { createdAt: "desc" },
         take: 10,
       },
+      workspace: true,
     },
   });
 }
 
 /**
- * Get all conversations
+ * Get conversations, optionally filtered by workspace
  */
-export async function getConversations(limit = 50) {
+export async function getConversations(workspaceId?: number, limit = 50) {
   return prisma.conversation.findMany({
+    where: workspaceId ? { workspaceId } : undefined,
     orderBy: { updatedAt: "desc" },
     take: limit,
     include: {
@@ -538,6 +540,7 @@ export async function getConversations(limit = 50) {
         orderBy: { createdAt: "desc" },
         take: 1, // Just get the last message for preview
       },
+      workspace: true,
       _count: {
         select: { messages: true },
       },
@@ -584,6 +587,94 @@ export async function closeConversation(id: number): Promise<Conversation> {
   return prisma.conversation.update({
     where: { id },
     data: { status: "closed" },
+  });
+}
+
+// ============ Workspace Functions ============
+
+export interface Workspace {
+  id: number;
+  name: string;
+  path: string;
+  createdAt: Date;
+}
+
+/**
+ * Create a new workspace
+ */
+export async function createWorkspace(name: string, path: string): Promise<Workspace> {
+  return prisma.workspace.create({
+    data: { name, path },
+  });
+}
+
+/**
+ * Get all workspaces
+ */
+export async function getWorkspaces(): Promise<Workspace[]> {
+  return prisma.workspace.findMany({
+    orderBy: { name: "asc" },
+  });
+}
+
+/**
+ * Get a workspace by ID
+ */
+export async function getWorkspace(id: number): Promise<Workspace | null> {
+  return prisma.workspace.findUnique({
+    where: { id },
+  });
+}
+
+/**
+ * Delete a workspace
+ */
+export async function deleteWorkspace(id: number): Promise<Workspace> {
+  return prisma.workspace.delete({
+    where: { id },
+  });
+}
+
+/**
+ * Create a git worktree for a conversation
+ */
+export async function createWorktree(
+  workspacePath: string,
+  branchName: string
+): Promise<string> {
+  const { exec } = await import("child_process");
+  const { promisify } = await import("util");
+  const execAsync = promisify(exec);
+  const path = await import("path");
+
+  // Create worktree directory path based on branch name
+  const worktreePath = path.join(
+    path.dirname(workspacePath),
+    `.worktrees`,
+    `${path.basename(workspacePath)}-${branchName}`
+  );
+
+  // Create the worktree
+  await execAsync(`git worktree add -b "${branchName}" "${worktreePath}"`, {
+    cwd: workspacePath,
+  });
+
+  return worktreePath;
+}
+
+/**
+ * Remove a git worktree
+ */
+export async function removeWorktree(
+  workspacePath: string,
+  worktreePath: string
+): Promise<void> {
+  const { exec } = await import("child_process");
+  const { promisify } = await import("util");
+  const execAsync = promisify(exec);
+
+  await execAsync(`git worktree remove "${worktreePath}"`, {
+    cwd: workspacePath,
   });
 }
 

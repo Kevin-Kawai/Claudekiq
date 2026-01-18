@@ -47,20 +47,39 @@ model Job {
   @@index([conversationId])
 }
 
-model Conversation {
+model Workspace {
   id        Int      @id @default(autoincrement())
-  title     String?  // Optional title, can be auto-generated from first message
-  sessionId String?  // Claude session ID for resuming
-  cwd       String?  // Working directory for the session
-  status    String   @default("active") // active, closed
+  name      String   @unique
+  path      String   // Base path to the git repository
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  // Relations
+  conversations Conversation[]
+
+  @@index([name])
+}
+
+model Conversation {
+  id          Int        @id @default(autoincrement())
+  title       String?    // Optional title, can be auto-generated from first message
+  sessionId   String?    // Claude session ID for resuming
+  cwd         String?    // Working directory for the session (worktree path if using worktree)
+  status      String     @default("active") // active, closed
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Workspace link
+  workspaceId   Int?
+  workspace     Workspace? @relation(fields: [workspaceId], references: [id])
+  worktreePath  String?    // Path to the worktree if one was created
+  worktreeBranch String?   // Branch name for the worktree
 
   // Relations
   messages Message[]
   jobs     Job[]
 
   @@index([status, updatedAt])
+  @@index([workspaceId])
 }
 
 model Message {
