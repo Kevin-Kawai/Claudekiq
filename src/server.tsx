@@ -12,6 +12,11 @@ import {
   pauseRecurringJob,
   resumeRecurringJob,
   isValidCronExpression,
+  prisma,
+  createConversation,
+  getConversation,
+  getConversations,
+  sendMessage,
 } from "./queue";
 import {
   getRegisteredJobs,
@@ -19,7 +24,8 @@ import {
   SendWelcomeEmailJob,
   GenerateReportJob,
   ExportDataJob,
-  SpawnClaudeSessionJob
+  SpawnClaudeSessionJob,
+  ConversationMessageJob,
 } from "./jobs";
 
 const app = new Hono();
@@ -114,10 +120,25 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .timestamp { color: #6b7280; font-size: 13px; }
         .error-text { color: #ef4444; font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .empty-state { padding: 40px; text-align: center; color: #6b7280; }
+        .view-link { color: #1976d2; text-decoration: none; font-weight: 500; }
+        .view-link:hover { text-decoration: underline; }
         .refresh-info { font-size: 12px; color: #9ca3af; }
         .cron-badge { background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; }
         .schedule-info { font-size: 12px; color: #6b7280; }
         .schedule-info small { color: #9ca3af; }
+        .conversations-section { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .conversations-header { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        .conversations-list { padding: 0; }
+        .conversation-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background 0.15s; }
+        .conversation-item:hover { background: #f9fafb; }
+        .conversation-item:last-child { border-bottom: none; }
+        .conversation-info { flex: 1; }
+        .conversation-title { font-weight: 500; margin-bottom: 4px; }
+        .conversation-preview { font-size: 13px; color: #6b7280; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .conversation-meta { font-size: 12px; color: #9ca3af; display: flex; gap: 12px; }
+        .conversation-status { padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+        .conversation-status.active { background: #d1fae5; color: #065f46; }
+        .conversation-status.closed { background: #e5e7eb; color: #374151; }
         .add-job-btn.schedule { background: #8b5cf6; }
         .add-job-btn.schedule:hover { background: #7c3aed; }
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; }
@@ -190,6 +211,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
                 '<td>' + job.attempts + '/' + job.maxAttempts + '</td>' +
                 '<td class="timestamp">' + created + '</td>' +
                 '<td class="error-text" title="' + (job.error || '') + '">' + (job.error || '-') + '</td>' +
+                '<td><a href="/jobs/' + job.id + '" class="view-link">View</a></td>' +
               '</tr>';
             }).join('');
           } catch (e) {
@@ -310,16 +332,107 @@ const Layout: FC<{ children: any }> = ({ children }) => (
           }
         }
 
+        // ============ Conversations ============
+        async function fetchConversations() {
+          try {
+            var res = await fetch('/api/conversations');
+            var conversations = await res.json();
+            var container = document.getElementById('conversations-list');
+
+            if (conversations.length === 0) {
+              container.innerHTML = '<div class="empty-state">No conversations yet. Start one!</div>';
+              return;
+            }
+
+            container.innerHTML = conversations.map(function(conv) {
+              var preview = '';
+              if (conv.messages && conv.messages.length > 0) {
+                try {
+                  var lastMsg = JSON.parse(conv.messages[0].content);
+                  preview = lastMsg.text || lastMsg.prompt || '(message)';
+                } catch(e) { preview = '(message)'; }
+              }
+              var title = conv.title || 'Conversation #' + conv.id;
+              var date = new Date(conv.updatedAt).toLocaleString();
+              var msgCount = conv._count ? conv._count.messages : 0;
+
+              return '<div class="conversation-item" onclick="window.location.href=\\'/conversations/' + conv.id + '\\'">' +
+                '<div class="conversation-info">' +
+                  '<div class="conversation-title">' + escapeHtml(title) + '</div>' +
+                  '<div class="conversation-preview">' + escapeHtml(preview) + '</div>' +
+                '</div>' +
+                '<div class="conversation-meta">' +
+                  '<span>' + msgCount + ' messages</span>' +
+                  '<span>' + date + '</span>' +
+                  '<span class="conversation-status ' + conv.status + '">' + conv.status + '</span>' +
+                '</div>' +
+              '</div>';
+            }).join('');
+          } catch (e) {
+            console.error('Failed to fetch conversations:', e);
+          }
+        }
+
+        function escapeHtml(text) {
+          if (!text) return '';
+          var div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        }
+
+        function openNewConversationModal() {
+          document.getElementById('new-conversation-modal').classList.add('active');
+        }
+
+        function closeNewConversationModal() {
+          document.getElementById('new-conversation-modal').classList.remove('active');
+          document.getElementById('new-conversation-message').value = '';
+          document.getElementById('new-conversation-cwd').value = '';
+        }
+
+        async function createConversation() {
+          var message = document.getElementById('new-conversation-message').value.trim();
+          if (!message) {
+            alert('Please enter a message');
+            return;
+          }
+          var cwd = document.getElementById('new-conversation-cwd').value.trim();
+          var body = { message: message };
+          if (cwd) body.cwd = cwd;
+
+          try {
+            var res = await fetch('/api/conversations', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+              var err = await res.json();
+              alert('Error: ' + (err.error || 'Unknown error'));
+              return;
+            }
+            var conv = await res.json();
+            closeNewConversationModal();
+            window.location.href = '/conversations/' + conv.id;
+          } catch (e) {
+            console.error('Failed to create conversation:', e);
+            alert('Failed to create conversation');
+          }
+        }
+
         // Initial fetch
         fetchStats();
         fetchJobs();
+        fetchConversations();
 
-        // Poll every 1 second
+        // Poll every 2 seconds
         setInterval(function() {
           fetchStats();
           fetchJobs();
-        }, 1000);
+          fetchConversations();
+        }, 2000);
       </script>`)}
+
     </body>
   </html>
 );
@@ -384,12 +497,50 @@ const JobList: FC = () => (
           <th>Attempts</th>
           <th>Created</th>
           <th>Error</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="jobs-tbody">
-        <tr><td colSpan={8} class="empty-state">Loading...</td></tr>
+        <tr><td colSpan={9} class="empty-state">Loading...</td></tr>
       </tbody>
     </table>
+  </div>
+);
+
+const ConversationsList: FC = () => (
+  <div class="conversations-section">
+    <div class="conversations-header">
+      <div>
+        <h2>Conversations</h2>
+        <span class="refresh-info">Claude Code sessions with message history</span>
+      </div>
+      <div class="job-buttons">
+        <button class="add-job-btn export" onclick="openNewConversationModal()">+ New Conversation</button>
+      </div>
+    </div>
+    <div id="conversations-list" class="conversations-list">
+      <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+);
+
+const NewConversationModal: FC = () => (
+  <div id="new-conversation-modal" class="modal" onclick="if(event.target===this)closeNewConversationModal()">
+    <div class="modal-content">
+      <h3>New Conversation</h3>
+      <div class="form-group">
+        <label>Initial Message</label>
+        <textarea id="new-conversation-message" rows={4} placeholder="What would you like Claude to do?" style="width:100%;resize:vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Working Directory (optional)</label>
+        <input type="text" id="new-conversation-cwd" placeholder="/path/to/directory" />
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-secondary" onclick="closeNewConversationModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="createConversation()">Start Conversation</button>
+      </div>
+    </div>
   </div>
 );
 
@@ -455,10 +606,455 @@ const Dashboard: FC = () => (
   <Layout>
     <h1>Queue Dashboard</h1>
     <QueueStats />
+    <ConversationsList />
     <JobList />
     <ScheduleModal />
     <ClaudePromptModal />
+    <NewConversationModal />
   </Layout>
+);
+
+const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
+  <html>
+    <head>
+      <title>Job Details - #{jobId}</title>
+      <style>{`
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .header h1 { font-size: 24px; }
+        .back-link { color: #666; text-decoration: none; }
+        .back-link:hover { color: #333; }
+        .job-info { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .job-info h2 { margin-bottom: 15px; font-size: 18px; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .info-item { }
+        .info-label { font-size: 12px; color: #666; text-transform: uppercase; }
+        .info-value { font-size: 14px; font-weight: 500; }
+        .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        .status-completed { background: #d4edda; color: #155724; }
+        .status-processing { background: #fff3cd; color: #856404; }
+        .status-pending { background: #e2e3e5; color: #383d41; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .conversation { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .conversation h2 { margin-bottom: 15px; font-size: 18px; }
+        .messages { max-height: 500px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; }
+        .message:last-child { margin-bottom: 0; }
+        .message-user { background: #e3f2fd; margin-left: 50px; }
+        .message-assistant { background: #f5f5f5; margin-right: 50px; }
+        .message-system { background: #fff8e1; font-size: 12px; color: #666; }
+        .message-result { background: #e8f5e9; font-size: 12px; }
+        .message-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 5px; }
+        .message-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }
+        .message-content code { background: #eee; padding: 2px 4px; border-radius: 3px; font-size: 13px; }
+        .tool-use { background: #f0f0f0; padding: 8px; border-radius: 4px; margin-top: 8px; font-size: 12px; }
+        .tool-name { font-weight: 600; color: #1976d2; }
+        .follow-up { display: flex; gap: 10px; }
+        .follow-up textarea { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; min-height: 60px; font-family: inherit; font-size: 14px; }
+        .follow-up button { padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .follow-up button:hover { background: #1565c0; }
+        .follow-up button:disabled { background: #ccc; cursor: not-allowed; }
+        .no-session { color: #666; font-style: italic; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+      `}</style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <a href="/" class="back-link">← Back to Dashboard</a>
+          <h1>Job #{jobId}</h1>
+        </div>
+        <div id="job-details">
+          <div class="loading">Loading job details...</div>
+        </div>
+      </div>
+      {raw(`<script>
+        const jobId = ${jobId};
+
+        async function fetchJobDetails() {
+          try {
+            const res = await fetch('/api/jobs/' + jobId);
+            if (!res.ok) {
+              throw new Error('Job not found');
+            }
+            const job = await res.json();
+            renderJobDetails(job);
+          } catch (e) {
+            document.getElementById('job-details').innerHTML = '<div class="error">Error loading job: ' + e.message + '</div>';
+          }
+        }
+
+        function renderJobDetails(job) {
+          const payload = JSON.parse(job.payload);
+          const hasSession = !!job.sessionId;
+          const isClaudeJob = payload.jobClass === 'SpawnClaudeSessionJob';
+
+          let html = '<div class="job-info"><h2>Job Information</h2><div class="info-grid">';
+          html += '<div class="info-item"><div class="info-label">Status</div><div class="info-value"><span class="status status-' + job.status + '">' + job.status + '</span></div></div>';
+          html += '<div class="info-item"><div class="info-label">Job Class</div><div class="info-value">' + payload.jobClass + '</div></div>';
+          html += '<div class="info-item"><div class="info-label">Created</div><div class="info-value">' + new Date(job.createdAt).toLocaleString() + '</div></div>';
+          html += '<div class="info-item"><div class="info-label">Attempts</div><div class="info-value">' + job.attempts + '/' + job.maxAttempts + '</div></div>';
+          if (job.sessionId) {
+            html += '<div class="info-item"><div class="info-label">Session ID</div><div class="info-value" style="font-size:11px;word-break:break-all;">' + job.sessionId + '</div></div>';
+          }
+          html += '</div></div>';
+
+          html += '<div class="conversation"><h2>Conversation</h2>';
+          html += '<div class="messages" id="messages">';
+
+          if (job.logs && job.logs.length > 0) {
+            job.logs.forEach(function(log) {
+              html += renderMessage(log);
+            });
+          } else {
+            html += '<div class="loading">No messages yet</div>';
+          }
+
+          html += '</div>';
+
+          if (isClaudeJob && hasSession) {
+            html += '<div class="follow-up">';
+            html += '<textarea id="follow-up-input" placeholder="Send a follow-up message..."></textarea>';
+            html += '<button id="send-btn" onclick="sendFollowUp()">Send</button>';
+            html += '</div>';
+          } else if (isClaudeJob && !hasSession) {
+            html += '<div class="no-session">Session not available for follow-up messages</div>';
+          }
+
+          html += '</div>';
+
+          document.getElementById('job-details').innerHTML = html;
+
+          // Scroll to bottom of messages
+          var messagesDiv = document.getElementById('messages');
+          if (messagesDiv) {
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+          }
+        }
+
+        function renderMessage(log) {
+          const content = JSON.parse(log.content);
+          let html = '<div class="message message-' + log.type + '">';
+          html += '<div class="message-label">' + log.type + ' • ' + new Date(log.createdAt).toLocaleTimeString() + '</div>';
+
+          if (log.type === 'user') {
+            html += '<div class="message-content">' + escapeHtml(content.prompt) + '</div>';
+          } else if (log.type === 'assistant') {
+            if (content.content && Array.isArray(content.content)) {
+              content.content.forEach(function(block) {
+                if (block.text) {
+                  html += '<div class="message-content">' + escapeHtml(block.text) + '</div>';
+                } else if (block.type === 'tool_use') {
+                  html += '<div class="tool-use"><span class="tool-name">' + block.name + '</span></div>';
+                }
+              });
+            }
+          } else if (log.type === 'result') {
+            html += '<div class="message-content">Session ' + content.subtype;
+            if (content.total_cost_usd) {
+              html += ' • Cost: $' + content.total_cost_usd.toFixed(4);
+            }
+            if (content.num_turns) {
+              html += ' • Turns: ' + content.num_turns;
+            }
+            html += '</div>';
+          } else if (log.type === 'system') {
+            html += '<div class="message-content">' + (content.subtype || 'system message') + '</div>';
+          }
+
+          html += '</div>';
+          return html;
+        }
+
+        function escapeHtml(text) {
+          if (!text) return '';
+          var div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        }
+
+        async function sendFollowUp() {
+          var input = document.getElementById('follow-up-input');
+          var btn = document.getElementById('send-btn');
+          var message = input.value.trim();
+
+          if (!message) return;
+
+          btn.disabled = true;
+          btn.textContent = 'Sending...';
+
+          try {
+            var res = await fetch('/api/jobs/' + jobId + '/message', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: message })
+            });
+
+            if (!res.ok) {
+              var err = await res.json();
+              throw new Error(err.error || 'Failed to send message');
+            }
+
+            input.value = '';
+            await fetchJobDetails();
+          } catch (e) {
+            alert('Error: ' + e.message);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = 'Send';
+          }
+        }
+
+        // Handle Enter key in textarea (Shift+Enter for newline)
+        document.addEventListener('keydown', function(e) {
+          if (e.target.id === 'follow-up-input' && e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendFollowUp();
+          }
+        });
+
+        fetchJobDetails();
+
+        // Auto-refresh every 5 seconds if job is processing
+        setInterval(function() {
+          var statusEl = document.querySelector('.status-processing');
+          if (statusEl) {
+            fetchJobDetails();
+          }
+        }, 5000);
+      </script>`)}
+    </body>
+  </html>
+);
+
+const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId }) => (
+  <html>
+    <head>
+      <title>Conversation #{conversationId}</title>
+      <style>{`
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .header h1 { font-size: 24px; }
+        .back-link { color: #666; text-decoration: none; }
+        .back-link:hover { color: #333; }
+        .conv-info { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .conv-info h2 { margin-bottom: 15px; font-size: 18px; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .info-item { }
+        .info-label { font-size: 12px; color: #666; text-transform: uppercase; }
+        .info-value { font-size: 14px; font-weight: 500; }
+        .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        .status-active { background: #d1fae5; color: #065f46; }
+        .status-closed { background: #e5e7eb; color: #374151; }
+        .conversation { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .conversation h2 { margin-bottom: 15px; font-size: 18px; }
+        .messages { max-height: 500px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
+        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 8px; }
+        .message:last-child { margin-bottom: 0; }
+        .message-user { background: #e3f2fd; margin-left: 50px; }
+        .message-assistant { background: #f5f5f5; margin-right: 50px; }
+        .message-system { background: #fff8e1; font-size: 12px; color: #666; }
+        .message-result { background: #e8f5e9; font-size: 12px; }
+        .message-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 5px; }
+        .message-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }
+        .tool-use { background: #f0f0f0; padding: 8px; border-radius: 4px; margin-top: 8px; font-size: 12px; }
+        .tool-name { font-weight: 600; color: #1976d2; }
+        .follow-up { display: flex; gap: 10px; }
+        .follow-up textarea { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; min-height: 60px; font-family: inherit; font-size: 14px; }
+        .follow-up button { padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .follow-up button:hover { background: #1565c0; }
+        .follow-up button:disabled { background: #ccc; cursor: not-allowed; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        .processing-indicator { background: #fff3cd; color: #856404; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .processing-indicator .spinner { width: 16px; height: 16px; border: 2px solid #856404; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <a href="/" class="back-link">← Back to Dashboard</a>
+          <h1>Conversation #{conversationId}</h1>
+        </div>
+        <div id="conversation-details">
+          <div class="loading">Loading conversation...</div>
+        </div>
+      </div>
+      {raw(`<script>
+        const conversationId = ${conversationId};
+
+        var lastMessageCount = 0;
+
+        async function fetchConversation() {
+          try {
+            // Preserve input value before re-render
+            var inputEl = document.getElementById('follow-up-input');
+            var savedInput = inputEl ? inputEl.value : '';
+            var wasFocused = inputEl && document.activeElement === inputEl;
+
+            // Preserve scroll position
+            var messagesEl = document.getElementById('messages');
+            var savedScrollTop = messagesEl ? messagesEl.scrollTop : 0;
+            var wasAtBottom = messagesEl ? (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 50) : true;
+
+            const res = await fetch('/api/conversations/' + conversationId);
+            if (!res.ok) throw new Error('Conversation not found');
+            const conv = await res.json();
+            var newMessageCount = conv.messages ? conv.messages.length : 0;
+            renderConversation(conv);
+
+            // Restore scroll position
+            var newMessagesEl = document.getElementById('messages');
+            if (newMessagesEl) {
+              if (newMessageCount > lastMessageCount || wasAtBottom) {
+                // New messages or was at bottom - scroll to bottom
+                newMessagesEl.scrollTop = newMessagesEl.scrollHeight;
+              } else {
+                // Preserve scroll position
+                newMessagesEl.scrollTop = savedScrollTop;
+              }
+            }
+            lastMessageCount = newMessageCount;
+
+            // Restore input value and cursor position after re-render
+            var newInputEl = document.getElementById('follow-up-input');
+            if (newInputEl && savedInput) {
+              newInputEl.value = savedInput;
+              if (wasFocused) {
+                newInputEl.focus();
+                // Restore cursor to end
+                newInputEl.selectionStart = newInputEl.selectionEnd = savedInput.length;
+              }
+            }
+          } catch (e) {
+            document.getElementById('conversation-details').innerHTML = '<div class="error">Error: ' + e.message + '</div>';
+          }
+        }
+
+        function renderConversation(conv) {
+          const hasActiveJob = conv.jobs && conv.jobs.some(j => j.status === 'processing' || j.status === 'pending');
+
+          let html = '<div class="conv-info"><h2>Conversation Info</h2><div class="info-grid">';
+          html += '<div class="info-item"><div class="info-label">Status</div><div class="info-value"><span class="status status-' + conv.status + '">' + conv.status + '</span></div></div>';
+          html += '<div class="info-item"><div class="info-label">Created</div><div class="info-value">' + new Date(conv.createdAt).toLocaleString() + '</div></div>';
+          html += '<div class="info-item"><div class="info-label">Messages</div><div class="info-value">' + conv.messages.length + '</div></div>';
+          if (conv.cwd) {
+            html += '<div class="info-item"><div class="info-label">Working Directory</div><div class="info-value" style="font-size:12px;word-break:break-all;">' + escapeHtml(conv.cwd) + '</div></div>';
+          }
+          html += '</div></div>';
+
+          html += '<div class="conversation"><h2>Messages</h2>';
+
+          if (hasActiveJob) {
+            html += '<div class="processing-indicator"><div class="spinner"></div>Processing message...</div>';
+          }
+
+          html += '<div class="messages" id="messages">';
+          if (conv.messages && conv.messages.length > 0) {
+            conv.messages.forEach(function(msg) {
+              html += renderMessage(msg);
+            });
+          } else {
+            html += '<div class="loading">No messages yet</div>';
+          }
+          html += '</div>';
+
+          if (conv.status === 'active') {
+            html += '<div class="follow-up">';
+            html += '<textarea id="follow-up-input" placeholder="Send a follow-up message..." ' + (hasActiveJob ? 'disabled' : '') + '></textarea>';
+            html += '<button id="send-btn" onclick="sendMessage()" ' + (hasActiveJob ? 'disabled' : '') + '>Send</button>';
+            html += '</div>';
+          }
+
+          html += '</div>';
+          document.getElementById('conversation-details').innerHTML = html;
+        }
+
+        function renderMessage(msg) {
+          const content = JSON.parse(msg.content);
+          let html = '<div class="message message-' + msg.role + '">';
+          html += '<div class="message-label">' + msg.role + ' • ' + new Date(msg.createdAt).toLocaleTimeString() + '</div>';
+
+          if (msg.role === 'user') {
+            html += '<div class="message-content">' + escapeHtml(content.text || content.prompt) + '</div>';
+          } else if (msg.role === 'assistant') {
+            if (content.content && Array.isArray(content.content)) {
+              content.content.forEach(function(block) {
+                if (block.text) {
+                  html += '<div class="message-content">' + escapeHtml(block.text) + '</div>';
+                } else if (block.type === 'tool_use') {
+                  html += '<div class="tool-use"><span class="tool-name">' + block.name + '</span></div>';
+                }
+              });
+            }
+          } else if (msg.role === 'result') {
+            html += '<div class="message-content">Session ' + content.subtype;
+            if (content.total_cost_usd) html += ' • Cost: $' + content.total_cost_usd.toFixed(4);
+            if (content.num_turns) html += ' • Turns: ' + content.num_turns;
+            html += '</div>';
+          } else if (msg.role === 'system') {
+            html += '<div class="message-content">' + (content.subtype || 'system') + '</div>';
+          }
+
+          html += '</div>';
+          return html;
+        }
+
+        function escapeHtml(text) {
+          if (!text) return '';
+          var div = document.createElement('div');
+          div.textContent = text;
+          return div.innerHTML;
+        }
+
+        async function sendMessage() {
+          var input = document.getElementById('follow-up-input');
+          var btn = document.getElementById('send-btn');
+          var message = input.value.trim();
+          if (!message) return;
+
+          btn.disabled = true;
+          btn.textContent = 'Sending...';
+          input.disabled = true;
+
+          try {
+            var res = await fetch('/api/conversations/' + conversationId + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: message })
+            });
+            if (!res.ok) {
+              var err = await res.json();
+              throw new Error(err.error || 'Failed to send');
+            }
+            input.value = '';
+            await fetchConversation();
+          } catch (e) {
+            alert('Error: ' + e.message);
+            btn.disabled = false;
+            btn.textContent = 'Send';
+            input.disabled = false;
+          }
+        }
+
+        document.addEventListener('keydown', function(e) {
+          if (e.target.id === 'follow-up-input' && e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+          }
+        });
+
+        fetchConversation();
+        setInterval(fetchConversation, 3000);
+      </script>`)}
+    </body>
+  </html>
 );
 
 // ============ Routes ============
@@ -466,6 +1062,18 @@ const Dashboard: FC = () => (
 // Dashboard page
 app.get("/", (c) => {
   return c.html(<Dashboard />);
+});
+
+// Job details page
+app.get("/jobs/:id", (c) => {
+  const jobId = c.req.param("id");
+  return c.html(<JobDetailsPage jobId={jobId} />);
+});
+
+// Conversation details page
+app.get("/conversations/:id", (c) => {
+  const conversationId = c.req.param("id");
+  return c.html(<ConversationDetailPage conversationId={conversationId} />);
 });
 
 // API: Get queue statistics
@@ -621,6 +1229,74 @@ app.post("/api/jobs/:id/resume", async (c) => {
   try {
     const job = await resumeRecurringJob(jobId);
     return c.json(job);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 400);
+  }
+});
+
+// API: Get job details
+app.get("/api/jobs/:id", async (c) => {
+  const jobId = parseInt(c.req.param("id"), 10);
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    include: {
+      conversation: true,
+    },
+  });
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+  return c.json(job);
+});
+
+// ============ Conversation API ============
+
+// Get all conversations
+app.get("/api/conversations", async (c) => {
+  const conversations = await getConversations();
+  return c.json(conversations);
+});
+
+// Create a new conversation
+app.post("/api/conversations", async (c) => {
+  const body = await c.req.json();
+  const conversation = await createConversation({
+    title: body.title,
+    cwd: body.cwd,
+  });
+
+  // If initial message provided, send it
+  if (body.message) {
+    await sendMessage(conversation.id, body.message);
+  }
+
+  return c.json(conversation, 201);
+});
+
+// Get a conversation with messages
+app.get("/api/conversations/:id", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  const conversation = await getConversation(id);
+
+  if (!conversation) {
+    return c.json({ error: "Conversation not found" }, 404);
+  }
+
+  return c.json(conversation);
+});
+
+// Send a message to a conversation
+app.post("/api/conversations/:id/messages", async (c) => {
+  const id = parseInt(c.req.param("id"), 10);
+  const body = await c.req.json();
+
+  if (!body.message) {
+    return c.json({ error: "Message is required" }, 400);
+  }
+
+  try {
+    const job = await sendMessage(id, body.message);
+    return c.json({ job, message: "Message queued for processing" }, 202);
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Unknown error" }, 400);
   }

@@ -15,10 +15,12 @@ export {
   type JobPayload,
   type JobHandler,
   type JobDefinition,
+  type JobContext,
 } from "./registry";
 
 // Import all job files to register them
 // Add new job imports here
 export * from "./email.job";
 export * from "./report.job";
-export * from "./spawnClaudeSession.job"
+export * from "./spawnClaudeSession.job";
+export * from "./conversationMessage.job";

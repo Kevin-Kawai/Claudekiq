@@ -57,7 +57,7 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
     }
 
     try {
-      await handler(args);
+      await handler(args, { jobId: job.id });
       await ack(job.id);
       console.log(`Job ${job.id} [${jobClass}] completed`);
     } catch (err) {

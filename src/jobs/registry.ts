@@ -28,8 +28,13 @@ export interface JobPayload<T = unknown> {
   args: T;
 }
 
+// Context passed to job handlers
+export interface JobContext {
+  jobId: number;
+}
+
 // Job handler function type
-export type JobHandler<T> = (args: T) => Promise<void>;
+export type JobHandler<T> = (args: T, context: JobContext) => Promise<void>;
 
 // Base enqueue options (without scheduling)
 export interface EnqueueOptions {

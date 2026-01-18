@@ -6,6 +6,10 @@ interface SpawnClaudeSessionArgs {
   cwd?: string;
 }
 
+/**
+ * @deprecated Use ConversationMessageJob instead for resumable conversations
+ * This job runs a one-shot Claude session without storing messages
+ */
 export const SpawnClaudeSessionJob = defineJob<SpawnClaudeSessionArgs>(
   "SpawnClaudeSessionJob",
   async (args) => {
@@ -25,15 +29,14 @@ export const SpawnClaudeSessionJob = defineJob<SpawnClaudeSessionArgs>(
       if (message.type === "assistant" && message.message?.content) {
         for (const block of message.message.content) {
           if ("text" in block) {
-            console.log(block.text)
+            console.log(block.text);
           } else if ("name" in block) {
-            console.log(`Tool: ${block.name}`)
+            console.log(`Tool: ${block.name}`);
           }
         }
       } else if (message.type === "result") {
-        console.log(`Done: ${message.subtype}`)
+        console.log(`Done: ${message.subtype}`);
       }
     }
   }
 )
-

@@ -3,7 +3,7 @@ import { PrismaLibSql } from "@prisma/adapter-libsql";
 import { CronExpressionParser } from "cron-parser";
 
 const adapter = new PrismaLibSql({
-  url: "file:./prisma/dev.db",
+  url: "file:./dev.db",
 });
 const prisma = new PrismaClient({ adapter });
 
@@ -469,6 +469,121 @@ export async function resumeRecurringJob(jobId: number): Promise<Job> {
       error: null,
       nextRunAt,
     },
+  });
+}
+
+// ============ Conversation Functions ============
+
+export interface Conversation {
+  id: number;
+  title: string | null;
+  sessionId: string | null;
+  cwd: string | null;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Message {
+  id: number;
+  conversationId: number;
+  role: string;
+  content: string;
+  jobId: number | null;
+  createdAt: Date;
+}
+
+/**
+ * Create a new conversation
+ */
+export async function createConversation(options: {
+  title?: string;
+  cwd?: string;
+}): Promise<Conversation> {
+  return prisma.conversation.create({
+    data: {
+      title: options.title,
+      cwd: options.cwd,
+    },
+  });
+}
+
+/**
+ * Get a conversation with its messages
+ */
+export async function getConversation(id: number) {
+  return prisma.conversation.findUnique({
+    where: { id },
+    include: {
+      messages: {
+        orderBy: { createdAt: "asc" },
+      },
+      jobs: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      },
+    },
+  });
+}
+
+/**
+ * Get all conversations
+ */
+export async function getConversations(limit = 50) {
+  return prisma.conversation.findMany({
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+    include: {
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1, // Just get the last message for preview
+      },
+      _count: {
+        select: { messages: true },
+      },
+    },
+  });
+}
+
+/**
+ * Send a message to a conversation (creates a job)
+ */
+export async function sendMessage(
+  conversationId: number,
+  message: string
+): Promise<Job> {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+
+  if (!conversation) {
+    throw new Error(`Conversation ${conversationId} not found`);
+  }
+
+  // Create a job to process this message
+  const job = await prisma.job.create({
+    data: {
+      payload: JSON.stringify({
+        jobClass: "ConversationMessageJob",
+        args: { conversationId, message },
+      }),
+      queue: "default",
+      priority: 0,
+      maxAttempts: 3,
+      conversationId,
+    },
+  });
+
+  return job;
+}
+
+/**
+ * Close a conversation
+ */
+export async function closeConversation(id: number): Promise<Conversation> {
+  return prisma.conversation.update({
+    where: { id },
+    data: { status: "closed" },
   });
 }
 
