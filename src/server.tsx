@@ -2817,7 +2817,7 @@ app.post("/api/toolsets/:id/set-default", async (c) => {
 
 // ============ Server ============
 
-const port = 3001;
+const port = 4242;
 console.log(`Queue Dashboard running on http://localhost:${port}`);
 
 serve({
