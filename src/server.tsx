@@ -1510,6 +1510,7 @@ const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
         <div class="header">
           <a href="/" class="back-link">← Back to Dashboard</a>
           <h1>Job #{jobId}</h1>
+          <button id="pause-btn" onclick="togglePolling()" style="margin-left:auto;padding:6px 12px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;">Pause Polling</button>
         </div>
         <div id="job-details">
           <div class="loading">Loading job details...</div>
@@ -1681,12 +1682,19 @@ const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
         fetchJobDetails();
 
         // Auto-refresh every 5 seconds if job is processing
+        var pollingPaused = false;
         setInterval(function() {
+          if (pollingPaused) return;
           var statusEl = document.querySelector('.status-processing');
           if (statusEl) {
             fetchJobDetails();
           }
         }, 5000);
+
+        function togglePolling() {
+          pollingPaused = !pollingPaused;
+          document.getElementById('pause-btn').textContent = pollingPaused ? 'Resume Polling' : 'Pause Polling';
+        }
       </script>`)}
     </body>
   </html>
@@ -1777,6 +1785,7 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
         <div class="header">
           <a href="/" class="back-link">← Back to Dashboard</a>
           <h1>Conversation #{conversationId}</h1>
+          <button id="pause-btn" onclick="togglePolling()" style="margin-left:auto;padding:6px 12px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;">Pause Polling</button>
         </div>
         <div id="conversation-details">
           <div class="loading">Loading conversation...</div>
@@ -2317,7 +2326,16 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
         });
 
         fetchConversation();
-        setInterval(fetchConversation, 3000);
+
+        var pollingPaused = false;
+        setInterval(function() {
+          if (!pollingPaused) fetchConversation();
+        }, 3000);
+
+        function togglePolling() {
+          pollingPaused = !pollingPaused;
+          document.getElementById('pause-btn').textContent = pollingPaused ? 'Resume Polling' : 'Pause Polling';
+        }
       </script>`)}
     </body>
   </html>
