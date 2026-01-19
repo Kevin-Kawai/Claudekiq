@@ -23,7 +23,9 @@ export const SpawnClaudeSessionJob = defineJob<SpawnClaudeSessionArgs>(
           "Bash",
         ],
         permissionMode: "acceptEdits",
-        cwd: args.cwd || process.cwd()
+        cwd: args.cwd || process.cwd(),
+        // PLACEHOLDER: Add remote MCP servers here (same format as conversationMessage.job.ts)
+        mcpServers: {}
       }
     })) {
       if (message.type === "assistant" && message.message?.content) {

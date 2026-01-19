@@ -43,6 +43,29 @@ export const ConversationMessageJob = defineJob<ConversationMessageJobArgs>(
       cwd: conversation.cwd || process.cwd(),
     };
 
+    // PLACEHOLDER: Add remote MCP servers here
+    // Example configuration for remote MCP servers:
+    // options.mcpServers = {
+    //   "my-remote-server": {
+    //     type: "sse",
+    //     url: "https://example.com/mcp/sse",
+    //     headers: { "Authorization": "Bearer YOUR_TOKEN" }
+    //   },
+    //   "another-server": {
+    //     type: "http",
+    //     url: "https://api.example.com/mcp",
+    //     headers: { "X-API-Key": "YOUR_API_KEY" }
+    //   }
+    // };
+    options.mcpServers = {
+      // Add your remote MCP servers here in this format:
+      // "server-name": { type: "sse", url: "https://...", headers: {...} }
+      notion: {
+        command: "npx",
+        args: ["-y", "mcp-remote", "https://mcp.notion.com/mcp"]
+      }
+    };
+
     // Add additional directories if specified
     if (storedOptions.additionalDirectories?.length > 0) {
       options.additionalDirectories = storedOptions.additionalDirectories;
