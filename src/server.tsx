@@ -175,9 +175,9 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .tool-tag button:hover { color: #ef4444; }
         .form-group input[type="checkbox"] { width: auto; margin-right: 8px; }
         .checkbox-label { display: flex; align-items: center; cursor: pointer; }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; }
-        .modal.active { display: flex; justify-content: center; align-items: center; }
-        .modal-content { background: white; padding: 24px; border-radius: 12px; max-width: 500px; width: 90%; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 100; overflow-y: auto; }
+        .modal.active { display: flex; justify-content: center; align-items: flex-start; padding: 40px 0; }
+        .modal-content { background: white; padding: 24px; border-radius: 12px; max-width: 500px; width: 90%; max-height: calc(100vh - 80px); overflow-y: auto; }
         .modal-content h3 { margin-bottom: 16px; }
         .form-group { margin-bottom: 16px; }
         .form-group label { display: block; margin-bottom: 4px; font-size: 14px; font-weight: 500; }
