@@ -1858,8 +1858,10 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
                 newMessagesHtml = '<div class="loading">No messages yet</div>';
               }
               messagesEl.innerHTML = newMessagesHtml;
-              if (newMessageCount > lastMessageCount) {
+              if (wasAtBottom) {
                 messagesEl.scrollTop = messagesEl.scrollHeight;
+              } else {
+                messagesEl.scrollTop = savedScrollTop;
               }
               lastMessageCount = newMessageCount;
               return;
@@ -1915,11 +1917,11 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             // Restore scroll position
             var newMessagesEl = document.getElementById('messages');
             if (newMessagesEl) {
-              if (newMessageCount > lastMessageCount || wasAtBottom) {
-                // New messages or was at bottom - scroll to bottom
+              if (wasAtBottom) {
+                // Was at bottom - scroll to bottom to show new messages
                 newMessagesEl.scrollTop = newMessagesEl.scrollHeight;
               } else {
-                // Preserve scroll position
+                // Preserve scroll position - user is reading previous messages
                 newMessagesEl.scrollTop = savedScrollTop;
               }
             }
