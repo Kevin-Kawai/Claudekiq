@@ -40,7 +40,7 @@ import {
 
 // Create the MCP server
 const server = new McpServer({
-  name: "job-queue",
+  name: "claudekiq",
   version: "1.0.0",
 });
 
