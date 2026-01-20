@@ -1,4 +1,4 @@
-import { dequeue, ack, fail, getStats, processScheduledJobs, prisma, withRetry } from "./queue";
+import { dequeue, ack, fail, getStats, processScheduledJobs, prisma } from "./queue";
 import {
   getJobHandler,
   parseJobPayload,
@@ -33,10 +33,8 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
   while (true) {
     try {
       // Process scheduled jobs - promotes one-time jobs and spawns recurring job instances
-      const { promoted, spawned } = await withRetry(
-        () => processScheduledJobs(),
-        { operationName: "processScheduledJobs" }
-      );
+      // Note: processScheduledJobs has internal retry logic for individual operations
+      const { promoted, spawned } = await processScheduledJobs();
       if (promoted > 0 || spawned > 0) {
         console.log(`Scheduler: promoted ${promoted} jobs, spawned ${spawned} recurring instances`);
       }
@@ -53,10 +51,8 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
 
     let job;
     try {
-      job = await withRetry(
-        () => dequeue(queue),
-        { operationName: "dequeue" }
-      );
+      // Note: dequeue has internal retry logic
+      job = await dequeue(queue);
 
       // Reset backoff on success
       dbErrorBackoff = 0;

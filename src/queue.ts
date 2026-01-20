@@ -241,33 +241,36 @@ export async function enqueueWithSchedule<T extends object>(
  */
 export async function dequeue(queue = "default"): Promise<Job | null> {
   // Use a transaction to atomically find and claim a job
-  return prisma.$transaction(async (tx) => {
-    // Find the next pending job
-    const job = await tx.job.findFirst({
-      where: {
-        queue,
-        status: "pending",
-      },
-      orderBy: [
-        { priority: "desc" },
-        { createdAt: "asc" },
-      ],
-    });
+  return withRetry(
+    () => prisma.$transaction(async (tx) => {
+      // Find the next pending job
+      const job = await tx.job.findFirst({
+        where: {
+          queue,
+          status: "pending",
+        },
+        orderBy: [
+          { priority: "desc" },
+          { createdAt: "asc" },
+        ],
+      });
 
-    if (!job) return null;
+      if (!job) return null;
 
-    // Claim it by updating status
-    const claimed = await tx.job.update({
-      where: { id: job.id },
-      data: {
-        status: "processing",
-        processedAt: new Date(),
-        attempts: { increment: 1 },
-      },
-    });
+      // Claim it by updating status
+      const claimed = await tx.job.update({
+        where: { id: job.id },
+        data: {
+          status: "processing",
+          processedAt: new Date(),
+          attempts: { increment: 1 },
+        },
+      });
 
-    return claimed;
-  });
+      return claimed;
+    }),
+    { operationName: "dequeue" }
+  );
 }
 
 /**
@@ -318,14 +321,17 @@ export async function fail(jobId: number, error: string): Promise<Job> {
  * Get queue statistics
  */
 export async function getStats(queue = "default") {
-  const [scheduled, pending, processing, completed, failed, recurring] = await Promise.all([
-    prisma.job.count({ where: { queue, status: "scheduled", isRecurring: false } }),
-    prisma.job.count({ where: { queue, status: "pending" } }),
-    prisma.job.count({ where: { queue, status: "processing" } }),
-    prisma.job.count({ where: { queue, status: "completed" } }),
-    prisma.job.count({ where: { queue, status: "failed" } }),
-    prisma.job.count({ where: { queue, isRecurring: true } }),
-  ]);
+  const [scheduled, pending, processing, completed, failed, recurring] = await withRetry(
+    () => Promise.all([
+      prisma.job.count({ where: { queue, status: "scheduled", isRecurring: false } }),
+      prisma.job.count({ where: { queue, status: "pending" } }),
+      prisma.job.count({ where: { queue, status: "processing" } }),
+      prisma.job.count({ where: { queue, status: "completed" } }),
+      prisma.job.count({ where: { queue, status: "failed" } }),
+      prisma.job.count({ where: { queue, isRecurring: true } }),
+    ]),
+    { operationName: "getStats" }
+  );
 
   return {
     scheduled,
@@ -392,16 +398,19 @@ export async function cleanup(maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
 export async function promoteScheduledJobs(): Promise<number> {
   const now = new Date();
 
-  const result = await prisma.job.updateMany({
-    where: {
-      status: "scheduled",
-      isRecurring: false,
-      scheduledFor: { lte: now },
-    },
-    data: {
-      status: "pending",
-    },
-  });
+  const result = await withRetry(
+    () => prisma.job.updateMany({
+      where: {
+        status: "scheduled",
+        isRecurring: false,
+        scheduledFor: { lte: now },
+      },
+      data: {
+        status: "pending",
+      },
+    }),
+    { operationName: "promoteScheduledJobs" }
+  );
 
   return result.count;
 }
@@ -414,41 +423,55 @@ export async function spawnRecurringJobs(): Promise<number> {
   const now = new Date();
 
   // Find recurring jobs that are due
-  const dueRecurringJobs = await prisma.job.findMany({
-    where: {
-      isRecurring: true,
-      status: "scheduled",
-      nextRunAt: { lte: now },
-    },
-  });
+  const dueRecurringJobs = await withRetry(
+    () => prisma.job.findMany({
+      where: {
+        isRecurring: true,
+        status: "scheduled",
+        nextRunAt: { lte: now },
+      },
+    }),
+    { operationName: "spawnRecurringJobs.findMany" }
+  );
 
   let spawned = 0;
 
   for (const recurringJob of dueRecurringJobs) {
-    // Create a new job instance
-    await prisma.job.create({
-      data: {
-        payload: recurringJob.payload,
-        queue: recurringJob.queue,
-        priority: recurringJob.priority,
-        maxAttempts: recurringJob.maxAttempts,
-        status: "pending",
-        parentJobId: recurringJob.id,
-      },
-    });
+    try {
+      // Create a new job instance
+      await withRetry(
+        () => prisma.job.create({
+          data: {
+            payload: recurringJob.payload,
+            queue: recurringJob.queue,
+            priority: recurringJob.priority,
+            maxAttempts: recurringJob.maxAttempts,
+            status: "pending",
+            parentJobId: recurringJob.id,
+          },
+        }),
+        { operationName: `spawnRecurringJobs.create(parent=${recurringJob.id})` }
+      );
 
-    // Calculate next run time and update the recurring job
-    const nextRunAt = getNextCronTime(recurringJob.cronExpression!, now);
+      // Calculate next run time and update the recurring job
+      const nextRunAt = getNextCronTime(recurringJob.cronExpression!, now);
 
-    await prisma.job.update({
-      where: { id: recurringJob.id },
-      data: {
-        lastRunAt: now,
-        nextRunAt,
-      },
-    });
+      await withRetry(
+        () => prisma.job.update({
+          where: { id: recurringJob.id },
+          data: {
+            lastRunAt: now,
+            nextRunAt,
+          },
+        }),
+        { operationName: `spawnRecurringJobs.update(${recurringJob.id})` }
+      );
 
-    spawned++;
+      spawned++;
+    } catch (error) {
+      // Log but continue processing other recurring jobs
+      console.error(`Failed to spawn instance for recurring job ${recurringJob.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return spawned;
@@ -607,40 +630,46 @@ export async function createConversation(options: {
  * Get a conversation with its messages
  */
 export async function getConversation(id: number) {
-  return prisma.conversation.findUnique({
-    where: { id },
-    include: {
-      messages: {
-        orderBy: { createdAt: "asc" },
+  return withRetry(
+    () => prisma.conversation.findUnique({
+      where: { id },
+      include: {
+        messages: {
+          orderBy: { createdAt: "asc" },
+        },
+        jobs: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
+        workspace: true,
       },
-      jobs: {
-        orderBy: { createdAt: "desc" },
-        take: 10,
-      },
-      workspace: true,
-    },
-  });
+    }),
+    { operationName: `getConversation(${id})` }
+  );
 }
 
 /**
  * Get conversations, optionally filtered by workspace
  */
 export async function getConversations(workspaceId?: number, limit = 50) {
-  return prisma.conversation.findMany({
-    where: workspaceId ? { workspaceId } : undefined,
-    orderBy: { updatedAt: "desc" },
-    take: limit,
-    include: {
-      messages: {
-        orderBy: { createdAt: "desc" },
-        take: 1, // Just get the last message for preview
+  return withRetry(
+    () => prisma.conversation.findMany({
+      where: workspaceId ? { workspaceId } : undefined,
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      include: {
+        messages: {
+          orderBy: { createdAt: "desc" },
+          take: 1, // Just get the last message for preview
+        },
+        workspace: true,
+        _count: {
+          select: { messages: true },
+        },
       },
-      workspace: true,
-      _count: {
-        select: { messages: true },
-      },
-    },
-  });
+    }),
+    { operationName: "getConversations" }
+  );
 }
 
 /**
