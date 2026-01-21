@@ -134,7 +134,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .conversations-section { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
         .conversations-header { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
         .conversations-list { padding: 0; }
-        .conversation-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background 0.15s; }
+        .conversation-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f3f4f6; cursor: pointer; transition: background 0.15s; text-decoration: none; color: inherit; }
         .conversation-item:hover { background: #f9fafb; }
         .conversation-item:last-child { border-bottom: none; }
         .conversation-info { flex: 1; }
@@ -655,17 +655,19 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         async function fetchConversations() {
           var container = document.getElementById('conversations-list');
 
-          if (!selectedWorkspaceId) {
-            container.innerHTML = '<div class="empty-state">Select a workspace to view conversations</div>';
-            return;
-          }
-
           try {
-            var res = await fetch('/api/conversations?workspaceId=' + selectedWorkspaceId);
+            var url = '/api/conversations';
+            if (selectedWorkspaceId) {
+              url += '?workspaceId=' + selectedWorkspaceId;
+            }
+            var res = await fetch(url);
             var conversations = await res.json();
 
             if (conversations.length === 0) {
-              container.innerHTML = '<div class="empty-state">No conversations in this workspace. Start one!</div>';
+              var emptyMsg = selectedWorkspaceId
+                ? 'No conversations in this workspace. Start one!'
+                : 'No conversations yet. Select a workspace and start one!';
+              container.innerHTML = '<div class="empty-state">' + emptyMsg + '</div>';
               return;
             }
 
@@ -681,10 +683,12 @@ const Layout: FC<{ children: any }> = ({ children }) => (
               var date = new Date(conv.updatedAt).toLocaleString();
               var msgCount = conv._count ? conv._count.messages : 0;
               var branchBadge = conv.worktreeBranch ? '<span style="background:#e0f2fe;color:#0369a1;padding:2px 6px;border-radius:4px;font-size:11px;font-family:monospace;">' + escapeHtml(conv.worktreeBranch) + '</span>' : '';
+              // Show workspace badge when viewing all conversations (no filter)
+              var workspaceBadge = !selectedWorkspaceId && conv.workspace ? '<span style="background:#f0fdf4;color:#166534;padding:2px 6px;border-radius:4px;font-size:11px;">' + escapeHtml(conv.workspace.name) + '</span>' : '';
 
-              return '<div class="conversation-item" onclick="window.location.href=\\'/conversations/' + conv.id + '\\'">' +
+              return '<a class="conversation-item" href="/conversations/' + conv.id + '">' +
                 '<div class="conversation-info">' +
-                  '<div class="conversation-title">' + escapeHtml(title) + ' ' + branchBadge + '</div>' +
+                  '<div class="conversation-title">' + escapeHtml(title) + ' ' + branchBadge + ' ' + workspaceBadge + '</div>' +
                   '<div class="conversation-preview">' + escapeHtml(preview) + '</div>' +
                 '</div>' +
                 '<div class="conversation-meta">' +
@@ -692,7 +696,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
                   '<span>' + date + '</span>' +
                   '<span class="conversation-status ' + conv.status + '">' + conv.status + '</span>' +
                 '</div>' +
-              '</div>';
+              '</a>';
             }).join('');
           } catch (e) {
             console.error('Failed to fetch conversations:', e);
@@ -702,7 +706,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         function updateConversationWorkspaceFilter() {
           var select = document.getElementById('conversation-workspace-filter');
           var currentValue = select.value;
-          select.innerHTML = '<option value="">-- Select workspace --</option>';
+          select.innerHTML = '<option value="">All conversations</option>';
           workspacesCache.forEach(function(ws) {
             var opt = document.createElement('option');
             opt.value = ws.id;
@@ -1056,9 +1060,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         setInterval(function() {
           fetchStats();
           fetchJobs();
-          if (selectedWorkspaceId) {
-            fetchConversations();
-          }
+          fetchConversations();
         }, 2000);
 
         // Poll workspaces less frequently
