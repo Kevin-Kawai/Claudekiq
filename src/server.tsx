@@ -144,6 +144,11 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .conversation-status { padding: 2px 8px; border-radius: 4px; font-size: 11px; }
         .conversation-status.active { background: #d1fae5; color: #065f46; }
         .conversation-status.closed { background: #e5e7eb; color: #374151; }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 20px; border-top: 1px solid #e5e7eb; }
+        .pagination button { padding: 6px 12px; border: 1px solid #d1d5db; background: white; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .pagination button:hover:not(:disabled) { background: #f3f4f6; }
+        .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .pagination .page-info { font-size: 13px; color: #6b7280; }
         .add-job-btn.schedule { background: #8b5cf6; }
         .add-job-btn.schedule:hover { background: #7c3aed; }
         .workspaces-section { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
@@ -210,14 +215,24 @@ const Layout: FC<{ children: any }> = ({ children }) => (
           }
         }
 
+        var currentJobsPage = 1;
+
+        function goToJobsPage(page) {
+          currentJobsPage = page;
+          fetchJobs();
+        }
+
         async function fetchJobs() {
           try {
-            const res = await fetch('/api/jobs');
-            const jobs = await res.json();
+            const res = await fetch('/api/jobs?page=' + currentJobsPage);
+            const data = await res.json();
+            const jobs = data.jobs;
             const tbody = document.getElementById('jobs-tbody');
+            const paginationDiv = document.getElementById('jobs-pagination');
 
             if (jobs.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No jobs in queue</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No jobs in queue</td></tr>';
+              paginationDiv.style.display = 'none';
               return;
             }
 
@@ -248,6 +263,17 @@ const Layout: FC<{ children: any }> = ({ children }) => (
                 '<td><a href="/jobs/' + job.id + '" class="view-link">View</a></td>' +
               '</tr>';
             }).join('');
+
+            // Update pagination controls
+            if (data.totalPages > 1) {
+              paginationDiv.style.display = 'flex';
+              paginationDiv.innerHTML =
+                '<button onclick="goToJobsPage(' + (data.page - 1) + ')" ' + (data.page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>' +
+                '<span class="page-info">Page ' + data.page + ' of ' + data.totalPages + ' (' + data.total + ' total)</span>' +
+                '<button onclick="goToJobsPage(' + (data.page + 1) + ')" ' + (data.page >= data.totalPages ? 'disabled' : '') + '>Next &raquo;</button>';
+            } else {
+              paginationDiv.style.display = 'none';
+            }
           } catch (e) {
             console.error('Failed to fetch jobs:', e);
           }
@@ -645,10 +671,17 @@ const Layout: FC<{ children: any }> = ({ children }) => (
 
         // ============ Conversations ============
         var selectedWorkspaceId = null;
+        var currentConversationPage = 1;
 
         function onConversationWorkspaceChange() {
           var select = document.getElementById('conversation-workspace-filter');
           selectedWorkspaceId = select.value ? parseInt(select.value) : null;
+          currentConversationPage = 1;
+          fetchConversations();
+        }
+
+        function goToConversationPage(page) {
+          currentConversationPage = page;
           fetchConversations();
         }
 
@@ -656,12 +689,13 @@ const Layout: FC<{ children: any }> = ({ children }) => (
           var container = document.getElementById('conversations-list');
 
           try {
-            var url = '/api/conversations';
+            var url = '/api/conversations?page=' + currentConversationPage;
             if (selectedWorkspaceId) {
-              url += '?workspaceId=' + selectedWorkspaceId;
+              url += '&workspaceId=' + selectedWorkspaceId;
             }
             var res = await fetch(url);
-            var conversations = await res.json();
+            var data = await res.json();
+            var conversations = data.conversations;
 
             if (conversations.length === 0) {
               var emptyMsg = selectedWorkspaceId
@@ -671,7 +705,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
               return;
             }
 
-            container.innerHTML = conversations.map(function(conv) {
+            var html = conversations.map(function(conv) {
               var preview = '';
               if (conv.messages && conv.messages.length > 0) {
                 try {
@@ -698,6 +732,17 @@ const Layout: FC<{ children: any }> = ({ children }) => (
                 '</div>' +
               '</a>';
             }).join('');
+
+            // Add pagination controls if more than one page
+            if (data.totalPages > 1) {
+              html += '<div class="pagination">';
+              html += '<button onclick="goToConversationPage(' + (data.page - 1) + ')" ' + (data.page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>';
+              html += '<span class="page-info">Page ' + data.page + ' of ' + data.totalPages + ' (' + data.total + ' total)</span>';
+              html += '<button onclick="goToConversationPage(' + (data.page + 1) + ')" ' + (data.page >= data.totalPages ? 'disabled' : '') + '>Next &raquo;</button>';
+              html += '</div>';
+            }
+
+            container.innerHTML = html;
           } catch (e) {
             console.error('Failed to fetch conversations:', e);
           }
@@ -1138,6 +1183,7 @@ const JobList: FC = () => (
         <tr><td colSpan={9} class="empty-state">Loading...</td></tr>
       </tbody>
     </table>
+    <div id="jobs-pagination" class="pagination" style="display: none;"></div>
   </div>
 );
 
@@ -2408,12 +2454,13 @@ app.get("/api/stats", async (c) => {
   return c.json(stats);
 });
 
-// API: Get list of recent jobs
+/// API: Get list of recent jobs with pagination
 app.get("/api/jobs", async (c) => {
   const queue = c.req.query("queue") || "default";
-  const limit = parseInt(c.req.query("limit") || "50", 10);
-  const jobs = await getJobs(queue, limit);
-  return c.json(jobs);
+  const limit = parseInt(c.req.query("limit") || "5", 10);
+  const page = parseInt(c.req.query("page") || "1", 10);
+  const result = await getJobs(queue, limit, page);
+  return c.json(result);
 });
 
 // API: Get registered job classes
@@ -2591,13 +2638,17 @@ app.get("/api/jobs/:id", async (c) => {
 
 // ============ Conversation API ============
 
-// Get conversations, optionally filtered by workspace
+// Get conversations, optionally filtered by workspace with pagination
 app.get("/api/conversations", async (c) => {
   const workspaceId = c.req.query("workspaceId");
-  const conversations = await getConversations(
-    workspaceId ? parseInt(workspaceId, 10) : undefined
+  const limit = parseInt(c.req.query("limit") || "5", 10);
+  const page = parseInt(c.req.query("page") || "1", 10);
+  const result = await getConversations(
+    workspaceId ? parseInt(workspaceId, 10) : undefined,
+    limit,
+    page
   );
-  return c.json(conversations);
+  return c.json(result);
 });
 
 // Create a new conversation

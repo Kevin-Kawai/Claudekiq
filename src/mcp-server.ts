@@ -390,7 +390,8 @@ server.registerTool(
     },
   },
   async ({ queue, limit, status }) => {
-    let jobs = await getJobs(queue, limit);
+    const data = await getJobs(queue, limit);
+    let jobs = data.jobs;
 
     if (status) {
       jobs = jobs.filter((j) => j.status === status);
@@ -418,7 +419,7 @@ server.registerTool(
           type: "text" as const,
           text:
             result.length > 0
-              ? JSON.stringify(result, null, 2)
+              ? JSON.stringify({ jobs: result, total: data.total }, null, 2)
               : "No jobs found matching criteria",
         },
       ],
@@ -671,9 +672,9 @@ server.registerTool(
     },
   },
   async ({ workspaceId, limit }) => {
-    const conversations = await getConversations(workspaceId, limit);
+    const data = await getConversations(workspaceId, limit);
 
-    if (conversations.length === 0) {
+    if (data.conversations.length === 0) {
       return {
         content: [
           {
@@ -684,7 +685,7 @@ server.registerTool(
       };
     }
 
-    const result = conversations.map((conv) => ({
+    const result = data.conversations.map((conv) => ({
       id: conv.id,
       title: conv.title || `Conversation #${conv.id}`,
       status: conv.status,
@@ -700,7 +701,7 @@ server.registerTool(
       content: [
         {
           type: "text" as const,
-          text: JSON.stringify(result, null, 2),
+          text: JSON.stringify({ conversations: result, total: data.total }, null, 2),
         },
       ],
     };

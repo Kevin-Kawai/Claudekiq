@@ -496,17 +496,25 @@ export async function getStats(queue = "default") {
 }
 
 /**
- * Get recent jobs from the queue
+ * Get recent jobs from the queue with pagination
  */
-export async function getJobs(queue = "default", limit = 50): Promise<Job[]> {
-  return withRetry(
-    () => prisma.job.findMany({
-      where: { queue },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-    }),
+export async function getJobs(queue = "default", limit = 5, page = 1) {
+  const skip = (page - 1) * limit;
+  const [jobs, total] = await withRetry(
+    () => Promise.all([
+      prisma.job.findMany({
+        where: { queue },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+      }),
+      prisma.job.count({
+        where: { queue },
+      }),
+    ]),
     { operationName: "getJobs" }
   );
+  return { jobs, total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 /**
@@ -833,27 +841,35 @@ export async function getConversation(id: number) {
 }
 
 /**
- * Get conversations, optionally filtered by workspace
+ * Get conversations, optionally filtered by workspace with pagination
  */
-export async function getConversations(workspaceId?: number, limit = 50) {
-  return withRetry(
-    () => prisma.conversation.findMany({
-      where: workspaceId ? { workspaceId } : undefined,
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-      include: {
-        messages: {
-          orderBy: { createdAt: "desc" },
-          take: 1, // Just get the last message for preview
+export async function getConversations(workspaceId?: number, limit = 5, page = 1) {
+  const skip = (page - 1) * limit;
+  const [conversations, total] = await withRetry(
+    () => Promise.all([
+      prisma.conversation.findMany({
+        where: workspaceId ? { workspaceId } : undefined,
+        orderBy: { updatedAt: "desc" },
+        skip,
+        take: limit,
+        include: {
+          messages: {
+            orderBy: { createdAt: "desc" },
+            take: 1, // Just get the last message for preview
+          },
+          workspace: true,
+          _count: {
+            select: { messages: true },
+          },
         },
-        workspace: true,
-        _count: {
-          select: { messages: true },
-        },
-      },
-    }),
+      }),
+      prisma.conversation.count({
+        where: workspaceId ? { workspaceId } : undefined,
+      }),
+    ]),
     { operationName: "getConversations" }
   );
+  return { conversations, total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 /**
