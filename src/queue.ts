@@ -692,7 +692,7 @@ export async function getScheduledJobs(queue = "default"): Promise<Job[]> {
 }
 
 /**
- * Cancel a scheduled or recurring job
+ * Cancel a scheduled or pending job
  */
 export async function cancelScheduledJob(jobId: number): Promise<Job> {
   return withRetry(
@@ -703,8 +703,8 @@ export async function cancelScheduledJob(jobId: number): Promise<Job> {
         throw new Error(`Job ${jobId} not found`);
       }
 
-      if (job.status !== "scheduled") {
-        throw new Error(`Job ${jobId} is not scheduled (status: ${job.status})`);
+      if (job.status !== "scheduled" && job.status !== "pending") {
+        throw new Error(`Job ${jobId} cannot be cancelled (status: ${job.status})`);
       }
 
       return prisma.job.update({

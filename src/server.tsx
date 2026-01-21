@@ -127,6 +127,14 @@ const Layout: FC<{ children: any }> = ({ children }) => (
         .empty-state { padding: 40px; text-align: center; color: #6b7280; }
         .view-link { color: #1976d2; text-decoration: none; font-weight: 500; }
         .view-link:hover { text-decoration: underline; }
+        .actions-cell { white-space: nowrap; }
+        .action-btn { padding: 4px 8px; border: none; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: 6px; font-weight: 500; }
+        .cancel-btn { background: #fee2e2; color: #dc2626; }
+        .cancel-btn:hover { background: #fecaca; }
+        .pause-btn { background: #fef3c7; color: #d97706; }
+        .pause-btn:hover { background: #fde68a; }
+        .resume-btn { background: #d1fae5; color: #059669; }
+        .resume-btn:hover { background: #a7f3d0; }
         .refresh-info { font-size: 12px; color: #9ca3af; }
         .cron-badge { background: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 11px; }
         .schedule-info { font-size: 12px; color: #6b7280; }
@@ -251,6 +259,21 @@ const Layout: FC<{ children: any }> = ({ children }) => (
               } else if (job.scheduledFor) {
                 scheduleInfo = new Date(job.scheduledFor).toLocaleString();
               }
+
+              // Build action buttons based on job status
+              var actions = '<a href="/jobs/' + job.id + '" class="view-link">View</a>';
+              if (job.status === 'scheduled') {
+                if (job.isRecurring) {
+                  actions += ' <button class="action-btn pause-btn" onclick="pauseJob(' + job.id + ')">Pause</button>';
+                } else {
+                  actions += ' <button class="action-btn cancel-btn" onclick="cancelJob(' + job.id + ')">Cancel</button>';
+                }
+              } else if (job.status === 'pending') {
+                actions += ' <button class="action-btn cancel-btn" onclick="cancelJob(' + job.id + ')">Cancel</button>';
+              } else if (job.status === 'failed' && job.error === 'Paused' && job.isRecurring) {
+                actions += ' <button class="action-btn resume-btn" onclick="resumeJob(' + job.id + ')">Resume</button>';
+              }
+
               return '<tr>' +
                 '<td>' + job.id + '</td>' +
                 '<td><span class="job-class">' + jobClass + '</span></td>' +
@@ -260,7 +283,7 @@ const Layout: FC<{ children: any }> = ({ children }) => (
                 '<td>' + job.attempts + '/' + job.maxAttempts + '</td>' +
                 '<td class="timestamp">' + created + '</td>' +
                 '<td class="error-text" title="' + (job.error || '') + '">' + (job.error || '-') + '</td>' +
-                '<td><a href="/jobs/' + job.id + '" class="view-link">View</a></td>' +
+                '<td class="actions-cell">' + actions + '</td>' +
               '</tr>';
             }).join('');
 
@@ -294,6 +317,55 @@ const Layout: FC<{ children: any }> = ({ children }) => (
             fetchJobs();
           } catch (e) {
             console.error('Failed to add job:', e);
+          }
+        }
+
+        async function cancelJob(jobId) {
+          if (!confirm('Are you sure you want to cancel this job?')) return;
+          try {
+            const res = await fetch('/api/jobs/' + jobId, { method: 'DELETE' });
+            if (!res.ok) {
+              const data = await res.json();
+              alert('Failed to cancel job: ' + (data.error || 'Unknown error'));
+              return;
+            }
+            fetchStats();
+            fetchJobs();
+          } catch (e) {
+            console.error('Failed to cancel job:', e);
+            alert('Failed to cancel job');
+          }
+        }
+
+        async function pauseJob(jobId) {
+          try {
+            const res = await fetch('/api/jobs/' + jobId + '/pause', { method: 'POST' });
+            if (!res.ok) {
+              const data = await res.json();
+              alert('Failed to pause job: ' + (data.error || 'Unknown error'));
+              return;
+            }
+            fetchStats();
+            fetchJobs();
+          } catch (e) {
+            console.error('Failed to pause job:', e);
+            alert('Failed to pause job');
+          }
+        }
+
+        async function resumeJob(jobId) {
+          try {
+            const res = await fetch('/api/jobs/' + jobId + '/resume', { method: 'POST' });
+            if (!res.ok) {
+              const data = await res.json();
+              alert('Failed to resume job: ' + (data.error || 'Unknown error'));
+              return;
+            }
+            fetchStats();
+            fetchJobs();
+          } catch (e) {
+            console.error('Failed to resume job:', e);
+            alert('Failed to resume job');
           }
         }
 
@@ -1556,6 +1628,13 @@ const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
         .follow-up button:disabled { background: #ccc; cursor: not-allowed; }
         .reset-btn { background: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-top: 12px; }
         .reset-btn:hover { background: #b91c1c; }
+        .job-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .cancel-btn { background: #fee2e2; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .cancel-btn:hover { background: #fecaca; }
+        .pause-btn { background: #fef3c7; color: #d97706; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .pause-btn:hover { background: #fde68a; }
+        .resume-btn { background: #d1fae5; color: #059669; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .resume-btn:hover { background: #a7f3d0; }
         .no-session { color: #666; font-style: italic; }
         .loading { text-align: center; padding: 40px; color: #666; }
         .error { background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
@@ -1602,8 +1681,31 @@ const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
             html += '<div class="info-item"><div class="info-label">Session ID</div><div class="info-value" style="font-size:11px;word-break:break-all;">' + job.sessionId + '</div></div>';
           }
           html += '</div>';
+
+          // Action buttons based on job status
+          var hasActions = false;
+          var actionsHtml = '<div class="job-actions">';
           if (job.status === 'processing') {
-            html += '<button class="reset-btn" onclick="resetJob()">Reset Job</button>';
+            actionsHtml += '<button class="reset-btn" onclick="resetJob()">Reset Job</button>';
+            hasActions = true;
+          }
+          if (job.status === 'scheduled') {
+            if (job.isRecurring) {
+              actionsHtml += '<button class="pause-btn" onclick="pauseJob()">Pause Recurring Job</button>';
+            } else {
+              actionsHtml += '<button class="cancel-btn" onclick="cancelJob()">Cancel Job</button>';
+            }
+            hasActions = true;
+          } else if (job.status === 'pending') {
+            actionsHtml += '<button class="cancel-btn" onclick="cancelJob()">Cancel Job</button>';
+            hasActions = true;
+          } else if (job.status === 'failed' && job.error === 'Paused' && job.isRecurring) {
+            actionsHtml += '<button class="resume-btn" onclick="resumeJob()">Resume Recurring Job</button>';
+            hasActions = true;
+          }
+          actionsHtml += '</div>';
+          if (hasActions) {
+            html += actionsHtml;
           }
           html += '</div>';
 
@@ -1720,6 +1822,46 @@ const JobDetailsPage: FC<{ jobId: string }> = ({ jobId }) => (
             if (!res.ok) {
               const err = await res.json();
               throw new Error(err.error || 'Failed to reset job');
+            }
+            await fetchJobDetails();
+          } catch (e) {
+            alert('Error: ' + e.message);
+          }
+        }
+
+        async function cancelJob() {
+          if (!confirm('Are you sure you want to cancel this job?')) return;
+          try {
+            const res = await fetch('/api/jobs/' + jobId, { method: 'DELETE' });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || 'Failed to cancel job');
+            }
+            await fetchJobDetails();
+          } catch (e) {
+            alert('Error: ' + e.message);
+          }
+        }
+
+        async function pauseJob() {
+          try {
+            const res = await fetch('/api/jobs/' + jobId + '/pause', { method: 'POST' });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || 'Failed to pause job');
+            }
+            await fetchJobDetails();
+          } catch (e) {
+            alert('Error: ' + e.message);
+          }
+        }
+
+        async function resumeJob() {
+          try {
+            const res = await fetch('/api/jobs/' + jobId + '/resume', { method: 'POST' });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || 'Failed to resume job');
             }
             await fetchJobDetails();
           } catch (e) {
