@@ -1,133 +1,53 @@
 import { PrismaClient, Prisma } from "@prisma/client";
-import { PrismaLibSql } from "@prisma/adapter-libsql";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { CronExpressionParser } from "cron-parser";
 
 /**
- * Create a new Prisma client with the libsql adapter
+ * Create Prisma client with better-sqlite3 adapter
+ * This is more stable than the libsql adapter for local file databases
  */
-function createPrismaClient(): PrismaClient {
-  const adapter = new PrismaLibSql({
-    url: "file:./dev.db",
-  });
-  return new PrismaClient({ adapter });
-}
+const adapter = new PrismaBetterSqlite3({ url: "./prisma/dev.db" });
+const prisma = new PrismaClient({ adapter });
 
-let prisma = createPrismaClient();
-
-// Reconnection state management
-let isReconnecting = false;
-let reconnectPromise: Promise<void> | null = null;
+// Track last successful query for monitoring
 let lastSuccessfulQuery = Date.now();
 
 /**
- * Reconnect to the database by creating a fresh Prisma client
- * Uses a mutex to prevent multiple simultaneous reconnections
+ * Check if an error is a database busy/locked error (SQLite specific)
  */
-async function reconnectPrisma(): Promise<void> {
-  // If already reconnecting, wait for that to complete
-  if (isReconnecting && reconnectPromise) {
-    console.log("Reconnection already in progress, waiting...");
-    await reconnectPromise;
-    return;
-  }
-
-  isReconnecting = true;
-  reconnectPromise = (async () => {
-    console.log("Reconnecting Prisma client due to stale connection...");
-    try {
-      await prisma.$disconnect();
-    } catch {
-      // Ignore disconnect errors - the connection may already be dead
-    }
-
-    // Small delay before creating new client to let resources clean up
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    prisma = createPrismaClient();
-
-    // Verify the new connection works with a simple query
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      console.log("Prisma client reconnected and verified successfully");
-      lastSuccessfulQuery = Date.now();
-    } catch (verifyError) {
-      console.warn("Reconnection verification failed, will retry on next operation:", verifyError);
-    }
-  })();
-
-  try {
-    await reconnectPromise;
-  } finally {
-    isReconnecting = false;
-    reconnectPromise = null;
-  }
-}
-
-/**
- * Periodic health check to keep the connection alive
- * This prevents the connection from going stale during idle periods
- */
-const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
-const CONNECTION_IDLE_THRESHOLD = 60000; // 1 minute
-
-async function healthCheck(): Promise<void> {
-  const timeSinceLastQuery = Date.now() - lastSuccessfulQuery;
-
-  // Only ping if connection has been idle
-  if (timeSinceLastQuery > CONNECTION_IDLE_THRESHOLD) {
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      lastSuccessfulQuery = Date.now();
-    } catch (error) {
-      console.warn("Health check failed, reconnecting...");
-      await reconnectPrisma();
-    }
-  }
-}
-
-// Start the health check interval
-setInterval(healthCheck, HEALTH_CHECK_INTERVAL);
-
-/**
- * Check if an error indicates a stale/dead connection that needs reconnection
- */
-function isConnectionError(error: unknown): boolean {
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    // P1008: Operations timed out - connection may be stale
-    // P1017: Server has closed the connection
-    if (error.code === "P1008" || error.code === "P1017") {
-      // Check for socket-related errors in the meta
-      // The driverAdapterError could be an Error object or have a message property
-      const meta = error.meta as { driverAdapterError?: Error | { message?: string } } | undefined;
-      if (meta?.driverAdapterError) {
-        const adapterError = meta.driverAdapterError;
-        // Check the string representation of the error object
-        const errorStr = String(adapterError);
-        if (errorStr.includes("SocketTimeout") || errorStr.includes("socket")) {
-          return true;
-        }
-        // Also check if it's an Error with a message
-        if (adapterError instanceof Error && adapterError.message) {
-          if (adapterError.message.toLowerCase().includes("socket")) {
-            return true;
-          }
-        }
-      }
-      // Also check the main error message
-      if (error.message.toLowerCase().includes("socket")) {
-        return true;
-      }
-      // P1008 timeout errors are generally connection-related with libsql
-      return true;
-    }
-  }
-
-  // Check for generic socket timeout errors
+function isBusyError(error: unknown): boolean {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
-    if (message.includes("sockettimeout") || message.includes("socket timeout")) {
-      return true;
-    }
+    return (
+      message.includes("database is locked") ||
+      message.includes("busy") ||
+      message.includes("sqlite_busy")
+    );
+  }
+  return false;
+}
+
+/**
+ * Check if a Prisma error is retryable (transient)
+ */
+function isPrismaRetryableError(error: unknown): boolean {
+  // Check for SQLite busy/locked errors
+  if (isBusyError(error)) {
+    return true;
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    // P2024: Timed out fetching a new connection from the connection pool
+    const retryableCodes = ["P2024"];
+    return retryableCodes.includes(error.code);
+  }
+
+  if (error instanceof Prisma.PrismaClientUnknownRequestError) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("database is locked") ||
+      message.includes("busy")
+    );
   }
 
   return false;
@@ -135,8 +55,7 @@ function isConnectionError(error: unknown): boolean {
 
 /**
  * Retry a Prisma operation with exponential backoff
- * Handles transient errors like timeouts and connection issues
- * Automatically reconnects on stale connection errors
+ * Handles transient errors like SQLite busy/locked errors
  */
 export async function withRetry<T>(
   operation: () => Promise<T>,
@@ -147,38 +66,21 @@ export async function withRetry<T>(
     operationName?: string;
   } = {}
 ): Promise<T> {
-  const maxAttempts = options.maxAttempts ?? 5; // Increased from 3 for better resilience
-  const baseDelayMs = options.baseDelayMs ?? 200; // Increased base delay
-  const maxDelayMs = options.maxDelayMs ?? 5000;
+  const maxAttempts = options.maxAttempts ?? 5;
+  const baseDelayMs = options.baseDelayMs ?? 100;
+  const maxDelayMs = options.maxDelayMs ?? 2000;
   const operationName = options.operationName ?? "Prisma operation";
 
   let lastError: Error | undefined;
-  let hasReconnected = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const result = await operation();
-      // Track successful query
       lastSuccessfulQuery = Date.now();
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Check if this is a connection error that requires reconnection
-      if (isConnectionError(error) && !hasReconnected) {
-        console.warn(
-          `${operationName} failed with connection error (attempt ${attempt}/${maxAttempts}): ${lastError.message}. Reconnecting...`
-        );
-        await reconnectPrisma();
-        hasReconnected = true;
-        // Add a delay after reconnection to let the new connection stabilize
-        await new Promise(resolve => setTimeout(resolve, 500));
-        // Don't increment attempt count for reconnection
-        attempt--;
-        continue;
-      }
-
-      // Check if this is a retryable Prisma error
       const isRetryable = isPrismaRetryableError(error);
 
       if (!isRetryable || attempt === maxAttempts) {
@@ -187,7 +89,7 @@ export async function withRetry<T>(
 
       // Calculate delay with exponential backoff and jitter
       const delay = Math.min(
-        baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 100,
+        baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 50,
         maxDelayMs
       );
 
@@ -200,42 +102,6 @@ export async function withRetry<T>(
   }
 
   throw lastError;
-}
-
-/**
- * Check if a Prisma error is retryable (transient)
- */
-function isPrismaRetryableError(error: unknown): boolean {
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    // P1008: Operations timed out
-    // P1017: Server has closed the connection
-    // P2024: Timed out fetching a new connection from the connection pool
-    const retryableCodes = ["P1008", "P1017", "P2024"];
-    return retryableCodes.includes(error.code);
-  }
-
-  if (error instanceof Prisma.PrismaClientUnknownRequestError) {
-    // Check for timeout-related messages
-    const message = error.message.toLowerCase();
-    return (
-      message.includes("timeout") ||
-      message.includes("timed out") ||
-      message.includes("socket") ||
-      message.includes("connection")
-    );
-  }
-
-  // Check for generic timeout errors
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    return (
-      message.includes("timeout") ||
-      message.includes("timed out") ||
-      message.includes("sockettimeout")
-    );
-  }
-
-  return false;
 }
 
 export type JobStatus = "scheduled" | "pending" | "processing" | "completed" | "failed";
@@ -1042,4 +908,4 @@ export async function removeWorktree(
   });
 }
 
-export { prisma, reconnectPrisma };
+export { prisma };

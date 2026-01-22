@@ -18,6 +18,7 @@
   "type": "commonjs",
   "devDependencies": {
     "@prisma/client": "^7.2.0",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^25.0.9",
     "prisma": "^7.2.0",
     "ts-node": "^10.9.2",
@@ -26,9 +27,9 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.12",
     "@hono/node-server": "^1.19.9",
-    "@libsql/client": "^0.17.0",
     "@modelcontextprotocol/sdk": "^1.25.2",
-    "@prisma/adapter-libsql": "^7.2.0",
+    "@prisma/adapter-better-sqlite3": "^7.2.0",
+    "better-sqlite3": "^11.0.0",
     "concurrently": "^9.2.1",
     "cron-parser": "^5.5.0",
     "hono": "^4.11.4",

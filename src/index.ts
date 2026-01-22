@@ -1,9 +1,7 @@
 import { PrismaClient } from "@prisma/client";
-import { PrismaLibSql } from "@prisma/adapter-libsql";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
-const adapter = new PrismaLibSql({
-  url: "file:./prisma/dev.db",
-});
+const adapter = new PrismaBetterSqlite3({ url: "./prisma/dev.db" });
 const prisma = new PrismaClient({ adapter });
 
 async function insertUser(name: string, email: string) {
