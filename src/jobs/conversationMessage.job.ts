@@ -5,12 +5,13 @@ import { prisma } from "../queue";
 interface ConversationMessageJobArgs {
   conversationId: number;
   message: string;
+  maxTurns?: number;
 }
 
 export const ConversationMessageJob = defineJob<ConversationMessageJobArgs>(
   "ConversationMessageJob",
   async (args, context) => {
-    const { conversationId, message } = args;
+    const { conversationId, message, maxTurns } = args;
 
     // Get the conversation
     const conversation = await prisma.conversation.findUnique({
@@ -63,6 +64,9 @@ export const ConversationMessageJob = defineJob<ConversationMessageJobArgs>(
       claudekiq: {
         command: "sh",
         args: ["-c", "cd /home/kevin/Projects/claudekiq && npm run mcp"]
+      todoist: {
+        "command": "npx",
+        "args": ["-y", "mcp-remote", "https://ai.todoist.net/mcp"]
       },
       notion: {
         command: "npx",
@@ -78,6 +82,11 @@ export const ConversationMessageJob = defineJob<ConversationMessageJobArgs>(
     // Resume if we have a session ID
     if (conversation.sessionId) {
       options.resume = conversation.sessionId;
+    }
+
+    // Set max turns if specified
+    if (maxTurns !== undefined) {
+      options.maxTurns = maxTurns;
     }
 
     let sessionIdCaptured = false;
