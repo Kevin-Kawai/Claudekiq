@@ -747,6 +747,7 @@ export async function sendMessage(
   options?: {
     scheduledFor?: Date;
     cronExpression?: string;
+    maxTurns?: number;
   }
 ): Promise<Job> {
   return withRetry(
@@ -775,7 +776,7 @@ export async function sendMessage(
         data: {
           payload: JSON.stringify({
             jobClass: "ConversationMessageJob",
-            args: { conversationId, message },
+            args: { conversationId, message, maxTurns: options?.maxTurns },
           }),
           queue: "default",
           priority: 0,

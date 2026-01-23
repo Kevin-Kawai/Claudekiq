@@ -1479,6 +1479,12 @@ const Layout: FC<{ children: any }> = ({ children }) => (
             body.allowedTools = allowedTools;
           }
 
+          // Add max turns if specified
+          var maxTurns = document.getElementById('new-conversation-max-turns').value;
+          if (maxTurns) {
+            body.maxTurns = parseInt(maxTurns, 10);
+          }
+
           try {
             var res = await fetch('/api/conversations', {
               method: 'POST',
@@ -1929,6 +1935,11 @@ const NewConversationModal: FC = () => (
         </div>
         <small>Add custom tools like Bash:*, mcp__notion__notion-search, etc.</small>
         <div id="conversation-custom-tools-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+      </div>
+      <div class="form-group">
+        <label>Max Turns (optional)</label>
+        <input type="number" id="new-conversation-max-turns" placeholder="e.g., 10" min="1" />
+        <small>Limit the number of agentic turns Claude can take</small>
       </div>
       <div class="modal-buttons">
         <button class="btn btn-secondary" onclick="closeNewConversationModal()">Cancel</button>
@@ -2432,7 +2443,8 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
               activeEl.id === 'msg-schedule-type' ||
               activeEl.id === 'msg-scheduled-for' ||
               activeEl.id === 'msg-cron' ||
-              activeEl.id === 'msg-schedule-checkbox'
+              activeEl.id === 'msg-schedule-checkbox' ||
+              activeEl.id === 'msg-max-turns'
             );
             var isInteractingWithOptions = activeEl && (
               activeEl.id === 'conv-new-dir' ||
@@ -2460,6 +2472,8 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             var savedScheduledFor = scheduledForEl ? scheduledForEl.value : '';
             var cronEl = document.getElementById('msg-cron');
             var savedCron = cronEl ? cronEl.value : '';
+            var maxTurnsEl = document.getElementById('msg-max-turns');
+            var savedMaxTurns = maxTurnsEl ? maxTurnsEl.value : '';
 
             const res = await fetch('/api/conversations/' + conversationId);
             if (!res.ok) throw new Error('Conversation not found');
@@ -2582,6 +2596,10 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             if (newCron && savedCron) {
               newCron.value = savedCron;
             }
+            var newMaxTurns = document.getElementById('msg-max-turns');
+            if (newMaxTurns && savedMaxTurns) {
+              newMaxTurns.value = savedMaxTurns;
+            }
           } catch (e) {
             document.getElementById('conversation-details').innerHTML = '<div class="error">Error: ' + e.message + '</div>';
           }
@@ -2687,6 +2705,7 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             html += '<div class="form-group" id="msg-scheduled-for-group"><label>Run At</label><input type="datetime-local" id="msg-scheduled-for" /></div>';
             html += '<div class="form-group" id="msg-cron-group" style="display:none;"><label>Cron Expression</label><input type="text" id="msg-cron" placeholder="0 9 * * *" /><small>Examples: "0 9 * * *" (9 AM daily), "0 0 * * 0" (midnight Sunday)</small></div>';
             html += '</div>';
+            html += '<div class="form-group" style="margin-top:8px;"><label>Max Turns (optional)</label><input type="number" id="msg-max-turns" placeholder="e.g., 10" min="1" style="width:100px;" ' + (hasActiveJob ? 'disabled' : '') + ' /><small style="margin-left:8px;">Limit agentic turns</small></div>';
             html += '</div>';
           }
 
@@ -2925,6 +2944,12 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             }
           }
 
+          // Add max turns if specified
+          var maxTurnsInput = document.getElementById('msg-max-turns');
+          if (maxTurnsInput && maxTurnsInput.value) {
+            body.maxTurns = parseInt(maxTurnsInput.value, 10);
+          }
+
           try {
             var res = await fetch('/api/conversations/' + conversationId + '/messages', {
               method: 'POST',
@@ -2941,6 +2966,9 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
             document.getElementById('msg-schedule-options').style.display = 'none';
             document.getElementById('msg-scheduled-for').value = '';
             document.getElementById('msg-cron').value = '';
+            // Reset max turns
+            var maxTurnsInput = document.getElementById('msg-max-turns');
+            if (maxTurnsInput) maxTurnsInput.value = '';
             await fetchConversation();
           } catch (e) {
             alert('Error: ' + e.message);
@@ -3280,12 +3308,15 @@ app.post("/api/conversations", async (c) => {
 
   // If initial message provided, send it (with optional scheduling)
   if (body.message) {
-    const scheduleOptions: { scheduledFor?: Date; cronExpression?: string } = {};
+    const scheduleOptions: { scheduledFor?: Date; cronExpression?: string; maxTurns?: number } = {};
     if (body.scheduledFor) {
       scheduleOptions.scheduledFor = new Date(body.scheduledFor);
     }
     if (body.cronExpression) {
       scheduleOptions.cronExpression = body.cronExpression;
+    }
+    if (body.maxTurns) {
+      scheduleOptions.maxTurns = parseInt(body.maxTurns, 10);
     }
     await sendMessage(
       conversation.id,
@@ -3387,7 +3418,7 @@ app.post("/api/conversations/:id/messages", async (c) => {
   }
 
   try {
-    const scheduleOptions: { scheduledFor?: Date; cronExpression?: string } = {};
+    const scheduleOptions: { scheduledFor?: Date; cronExpression?: string; maxTurns?: number } = {};
     if (body.scheduledFor) {
       scheduleOptions.scheduledFor = new Date(body.scheduledFor);
     }
@@ -3396,6 +3427,9 @@ app.post("/api/conversations/:id/messages", async (c) => {
         return c.json({ error: `Invalid cron expression: ${body.cronExpression}` }, 400);
       }
       scheduleOptions.cronExpression = body.cronExpression;
+    }
+    if (body.maxTurns) {
+      scheduleOptions.maxTurns = parseInt(body.maxTurns, 10);
     }
     const job = await sendMessage(
       id,
