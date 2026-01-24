@@ -100,21 +100,38 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
         if (jobClass === "ConversationMessageJob" && process.env.DISCORD_WEBHOOK_URL) {
           const { conversationId } = args as { conversationId: number };
           try {
-            // Fetch conversation and latest result message for metadata
+            // Fetch conversation with result and last assistant message
             const conversation = await prisma.conversation.findUnique({
               where: { id: conversationId },
               include: {
                 messages: {
-                  where: { role: "result" },
+                  where: { role: { in: ["result", "assistant"] } },
                   orderBy: { createdAt: "desc" },
-                  take: 1,
+                  take: 10, // Get recent messages to find both result and last assistant
                 },
               },
             });
 
             if (conversation) {
-              const resultMsg = conversation.messages[0];
+              const resultMsg = conversation.messages.find(m => m.role === "result");
+              const assistantMsg = conversation.messages.find(m => m.role === "assistant");
               const resultData = resultMsg ? JSON.parse(resultMsg.content) : {};
+
+              // Extract text from assistant message content blocks
+              let responseText: string | undefined;
+              if (assistantMsg) {
+                try {
+                  const assistantData = JSON.parse(assistantMsg.content);
+                  if (assistantData.content && Array.isArray(assistantData.content)) {
+                    responseText = assistantData.content
+                      .filter((block: { type?: string; text?: string }) => block.type === "text" && block.text)
+                      .map((block: { text: string }) => block.text)
+                      .join("\n");
+                  }
+                } catch {
+                  // Ignore parse errors
+                }
+              }
 
               await SendDiscordNotificationJob.performLater({
                 conversationId,
@@ -122,6 +139,7 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
                 status: "completed",
                 cost: resultData.total_cost_usd,
                 turns: resultData.num_turns,
+                responseText,
               }, { priority: 10 });
             }
           } catch (notifyErr) {
