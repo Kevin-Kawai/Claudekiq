@@ -139,6 +139,26 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
       console.error(`Job ${job.id} [${jobClass}] failed: ${errorMessage}`);
       try {
         await fail(job.id, errorMessage);
+
+        // Send Discord notification for failed conversation jobs
+        if (jobClass === "ConversationMessageJob" && process.env.DISCORD_WEBHOOK_URL) {
+          const { conversationId } = args as { conversationId: number };
+          try {
+            const conversation = await prisma.conversation.findUnique({
+              where: { id: conversationId },
+            });
+
+            await SendDiscordNotificationJob.performLater({
+              conversationId,
+              conversationTitle: conversation?.title || undefined,
+              status: "failed",
+              error: errorMessage,
+            }, { priority: 10 });
+          } catch (notifyErr) {
+            // Don't crash if notification fails
+            console.error(`Failed to enqueue Discord notification: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`);
+          }
+        }
       } catch (failErr) {
         // We couldn't mark the job as failed - log and continue
         // The job will remain in "processing" state and eventually be reset by resetStaleJobs
