@@ -97,7 +97,9 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
         console.log(`Job ${job.id} [${jobClass}] completed`);
 
         // Send Discord notification for completed conversation jobs
-        if (jobClass === "ConversationMessageJob" && process.env.DISCORD_WEBHOOK_URL) {
+        // Supports both webhook mode (DISCORD_WEBHOOK_URL) and bot mode (DISCORD_BOT_TOKEN + DISCORD_CHANNEL_ID)
+        const discordConfigured = process.env.DISCORD_WEBHOOK_URL || (process.env.DISCORD_BOT_TOKEN && process.env.DISCORD_CHANNEL_ID);
+        if (jobClass === "ConversationMessageJob" && discordConfigured) {
           const { conversationId } = args as { conversationId: number };
           try {
             // Fetch conversation with result and last assistant message
@@ -159,7 +161,8 @@ export async function runWorker(options: WorkerOptions = {}): Promise<never> {
         await fail(job.id, errorMessage);
 
         // Send Discord notification for failed conversation jobs
-        if (jobClass === "ConversationMessageJob" && process.env.DISCORD_WEBHOOK_URL) {
+        const discordConfiguredForFailure = process.env.DISCORD_WEBHOOK_URL || (process.env.DISCORD_BOT_TOKEN && process.env.DISCORD_CHANNEL_ID);
+        if (jobClass === "ConversationMessageJob" && discordConfiguredForFailure) {
           const { conversationId } = args as { conversationId: number };
           try {
             const conversation = await prisma.conversation.findUnique({
