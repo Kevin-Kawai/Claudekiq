@@ -819,9 +819,48 @@ export async function closeConversation(id: number): Promise<Conversation> {
 }
 
 /**
+ * Delete a Discord thread via the API
+ */
+async function deleteDiscordThread(threadId: string): Promise<void> {
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+  if (!botToken) return;
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
+      method: "DELETE",
+      headers: {
+        "Authorization": `Bot ${botToken}`,
+      },
+    });
+
+    if (!response.ok && response.status !== 404) {
+      console.error(`Failed to delete Discord thread ${threadId}: ${response.status}`);
+    }
+  } catch (err) {
+    console.error(`Error deleting Discord thread ${threadId}:`, err);
+  }
+}
+
+/**
  * Archive a conversation (hides from default view)
+ * Also deletes the associated Discord thread if one exists
  */
 export async function archiveConversation(id: number): Promise<Conversation> {
+  // First, check if there's a Discord thread to delete
+  const mapping = await prisma.discordThreadMapping.findUnique({
+    where: { conversationId: id },
+  });
+
+  if (mapping) {
+    // Delete the Discord thread
+    await deleteDiscordThread(mapping.threadId);
+
+    // Delete the mapping
+    await prisma.discordThreadMapping.delete({
+      where: { conversationId: id },
+    });
+  }
+
   return withRetry(
     () => prisma.conversation.update({
       where: { id },
@@ -846,8 +885,25 @@ export async function unarchiveConversation(id: number): Promise<Conversation> {
 
 /**
  * Archive multiple conversations by IDs
+ * Also deletes associated Discord threads
  */
 export async function archiveConversations(ids: number[]): Promise<number> {
+  // Find and delete Discord threads for these conversations
+  const mappings = await prisma.discordThreadMapping.findMany({
+    where: { conversationId: { in: ids } },
+  });
+
+  for (const mapping of mappings) {
+    await deleteDiscordThread(mapping.threadId);
+  }
+
+  // Delete all mappings
+  if (mappings.length > 0) {
+    await prisma.discordThreadMapping.deleteMany({
+      where: { conversationId: { in: ids } },
+    });
+  }
+
   const result = await withRetry(
     () => prisma.conversation.updateMany({
       where: { id: { in: ids } },
@@ -862,6 +918,7 @@ export async function archiveConversations(ids: number[]): Promise<number> {
  * Archive old conversations based on last activity
  * @param olderThanDays - Archive conversations that haven't been updated in this many days
  * @param workspaceId - Optional: only archive conversations in this workspace
+ * Also deletes associated Discord threads
  */
 export async function archiveOldConversations(olderThanDays: number, workspaceId?: number): Promise<number> {
   const cutoffDate = new Date();
@@ -872,6 +929,31 @@ export async function archiveOldConversations(olderThanDays: number, workspaceId
     isArchived: false,
     ...(workspaceId ? { workspaceId } : {}),
   };
+
+  // Find conversations that will be archived
+  const conversationsToArchive = await prisma.conversation.findMany({
+    where: whereClause,
+    select: { id: true },
+  });
+
+  const ids = conversationsToArchive.map(c => c.id);
+
+  // Delete Discord threads for these conversations
+  if (ids.length > 0) {
+    const mappings = await prisma.discordThreadMapping.findMany({
+      where: { conversationId: { in: ids } },
+    });
+
+    for (const mapping of mappings) {
+      await deleteDiscordThread(mapping.threadId);
+    }
+
+    if (mappings.length > 0) {
+      await prisma.discordThreadMapping.deleteMany({
+        where: { conversationId: { in: ids } },
+      });
+    }
+  }
 
   const result = await withRetry(
     () => prisma.conversation.updateMany({
