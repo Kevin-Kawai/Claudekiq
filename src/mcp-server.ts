@@ -409,12 +409,8 @@ server.registerTool(
     },
   },
   async ({ queue, limit, status }) => {
-    const data = await getJobs(queue, limit);
-    let jobs = data.jobs;
-
-    if (status) {
-      jobs = jobs.filter((j) => j.status === status);
-    }
+    const data = await getJobs(queue, limit, 1, status);
+    const jobs = data.jobs;
 
     const result = jobs.map((job) => {
       const payload = JSON.parse(job.payload);

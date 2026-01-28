@@ -364,20 +364,27 @@ export async function getStats(queue = "default") {
 /**
  * Get recent jobs from the queue with pagination
  */
-export async function getJobs(queue = "default", limit = 5, page = 1) {
+export async function getJobs(
+  queue = "default",
+  limit = 5,
+  page = 1,
+  status?: "scheduled" | "pending" | "processing" | "completed" | "failed"
+) {
   const skip = (page - 1) * limit;
+  const where = status ? { queue, status } : { queue };
   const [jobs, total] = await withRetry(
-    () => Promise.all([
-      prisma.job.findMany({
-        where: { queue },
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limit,
-      }),
-      prisma.job.count({
-        where: { queue },
-      }),
-    ]),
+    () =>
+      Promise.all([
+        prisma.job.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: limit,
+        }),
+        prisma.job.count({
+          where,
+        }),
+      ]),
     { operationName: "getJobs" }
   );
   return { jobs, total, page, limit, totalPages: Math.ceil(total / limit) };

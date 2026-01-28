@@ -4183,13 +4183,14 @@ const ConversationDetailPage: FC<{ conversationId: string }> = ({ conversationId
         }, 3000);
 
         // Pause polling when user is focused on the input to prevent jitter
+        var pausePollingIds = ['follow-up-input', 'conv-new-tool', 'conv-new-dir'];
         document.addEventListener('focusin', function(e) {
-          if (e.target.id === 'follow-up-input') {
+          if (pausePollingIds.indexOf(e.target.id) !== -1) {
             pollingPausedByFocus = true;
           }
         });
         document.addEventListener('focusout', function(e) {
-          if (e.target.id === 'follow-up-input') {
+          if (pausePollingIds.indexOf(e.target.id) !== -1) {
             // Small delay before resuming to avoid immediate re-render
             setTimeout(function() {
               pollingPausedByFocus = false;
@@ -4264,7 +4265,14 @@ app.get("/api/jobs", async (c) => {
   const queue = c.req.query("queue") || "default";
   const limit = parseInt(c.req.query("limit") || "5", 10);
   const page = parseInt(c.req.query("page") || "1", 10);
-  const result = await getJobs(queue, limit, page);
+  const status = c.req.query("status") as
+    | "scheduled"
+    | "pending"
+    | "processing"
+    | "completed"
+    | "failed"
+    | undefined;
+  const result = await getJobs(queue, limit, page, status);
   return c.json(result);
 });
 
